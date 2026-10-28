@@ -15,14 +15,24 @@ argon2 = "0.6.0"
 base64 = "0.23.1"
 bip39 = "3.0.0"
 chacha20poly1305 = "0.11.0"
+chrono = { version = "0.4.45", features = ["serde"] }
+csv = "1.4.0"
 ed25519-dalek = "3.0.0"
+futures = "0.3.34"
 getrandom = "0.4.3"
 hkdf = "0.13.0"
 ourshell-proto.workspace = true
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+russh = "0.63.1"
+russh-sftp = "3.0.1"
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11.0"
 thiserror.workspace = true
+tokio = { workspace = true, features = ["full"] }
 uuid = { version = "1.26.1", features = ["v4", "serde"] }
 x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 zeroize = { version = "1.9.1", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

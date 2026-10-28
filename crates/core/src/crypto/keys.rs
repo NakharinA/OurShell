@@ -212,7 +212,7 @@ impl ItemEnvelope {
     }
 }
 
-mod b64 {
+pub(crate) mod b64 {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
     use serde::{Deserialize, Deserializer, Serializer};
