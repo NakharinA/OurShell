@@ -164,25 +164,14 @@ pub async fn finish(
     .await?;
     db::log_event(state.pool(), org_id, Some(user_id), "login", None).await?;
 
-    let account: (String, String, String, Vec<u8>) = sqlx::query_as(
-        "SELECT enc_public, sign_public, kdf, wrapped_account_keys FROM account_keys WHERE user_id = $1",
+    let account: (String, String, String, Vec<u8>, Option<Vec<u8>>) = sqlx::query_as(
+        "SELECT enc_public, sign_public, kdf, wrapped_account_keys, recovery_account_wrap FROM account_keys WHERE user_id = $1",
     )
     .bind(user_id)
     .fetch_one(state.pool())
     .await?;
 
-    type VaultRow = (String, String, String, String, Vec<u8>, Option<Vec<u8>>);
-    let vault_rows: Vec<VaultRow> = sqlx::query_as(
-        r#"
-        SELECT v.id::text, v.kind, v.name, vm.key_id, vm.sealed_vault_key, vm.recovery_wrap
-        FROM vault_members vm
-        JOIN vaults v ON v.id = vm.vault_id
-        WHERE vm.user_id = $1
-        "#,
-    )
-    .bind(user_id)
-    .fetch_all(state.pool())
-    .await?;
+    let vault_rows = db::user_vaults(state.pool(), user_id).await?;
 
     let vaults = vault_rows
         .into_iter()
@@ -209,6 +198,7 @@ pub async fn finish(
             sign_public: account.1,
             kdf: account.2,
             wrapped_account_keys: account.3,
+            recovery_account_wrap: account.4.unwrap_or_default(),
         },
         vaults,
     }))

@@ -5,9 +5,12 @@
 //! building the account/vault upload) and in `crate::vault`.
 
 use ourshell_proto::sync::{
-    ApiError, DeviceListResponse, LoginFinish, LoginStart, LoginStartResponse, PullResponse,
+    AccountPasswordFinish, AccountPasswordStart, AccountPasswordStartResponse,
+    AccountVaultsResponse, AddVaultMemberRequest, ApiError, CreateInviteRequest,
+    CreateInviteResponse, CreateVaultRequest, DeviceListResponse, IdResponse, LoginFinish,
+    LoginStart, LoginStartResponse, OrgUsersResponse, PublicKeysResponse, PullResponse,
     PushRequest, PushResponse, RegisterFinish, RegisterStart, RegisterStartResponse,
-    SessionResponse, TotpConfirm, TotpSetupResponse, API_PREFIX,
+    SessionResponse, TotpConfirm, TotpSetupResponse, VaultMembersResponse, API_PREFIX,
 };
 use reqwest::Method;
 use serde::de::DeserializeOwned;
@@ -158,6 +161,102 @@ impl SyncClient {
     pub async fn pull(&self, token: &str, vault_id: &str, since: i64) -> Result<PullResponse> {
         let path = format!("/vaults/{vault_id}/items?since={since}");
         self.send::<(), _>(Method::GET, &path, Some(token), None)
+            .await
+    }
+
+    pub async fn account_vaults(&self, token: &str) -> Result<AccountVaultsResponse> {
+        self.send::<(), _>(Method::GET, "/account/vaults", Some(token), None)
+            .await
+    }
+
+    // ----- account password change / recovery-while-signed-in -----
+
+    pub async fn account_password_start(
+        &self,
+        token: &str,
+        body: &AccountPasswordStart,
+    ) -> Result<AccountPasswordStartResponse> {
+        self.send(
+            Method::POST,
+            "/account/password/start",
+            Some(token),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn account_password_finish(
+        &self,
+        token: &str,
+        body: &AccountPasswordFinish,
+    ) -> Result<()> {
+        self.send(
+            Method::POST,
+            "/account/password/finish",
+            Some(token),
+            Some(body),
+        )
+        .await
+    }
+
+    // ----- team vaults / org admin -----
+
+    pub async fn public_keys(&self, token: &str, email: &str) -> Result<PublicKeysResponse> {
+        let path = format!("/users/{email}/public-keys");
+        self.send::<(), _>(Method::GET, &path, Some(token), None)
+            .await
+    }
+
+    pub async fn create_vault(&self, token: &str, body: &CreateVaultRequest) -> Result<IdResponse> {
+        self.send(Method::POST, "/vaults", Some(token), Some(body))
+            .await
+    }
+
+    pub async fn vault_members(&self, token: &str, vault_id: &str) -> Result<VaultMembersResponse> {
+        let path = format!("/vaults/{vault_id}/members");
+        self.send::<(), _>(Method::GET, &path, Some(token), None)
+            .await
+    }
+
+    pub async fn add_vault_member(
+        &self,
+        token: &str,
+        vault_id: &str,
+        body: &AddVaultMemberRequest,
+    ) -> Result<()> {
+        let path = format!("/vaults/{vault_id}/members");
+        self.send(Method::POST, &path, Some(token), Some(body))
+            .await
+    }
+
+    pub async fn remove_vault_member(
+        &self,
+        token: &str,
+        vault_id: &str,
+        user_id: &str,
+    ) -> Result<()> {
+        let path = format!("/vaults/{vault_id}/members/{user_id}");
+        self.send::<(), ()>(Method::DELETE, &path, Some(token), None)
+            .await
+    }
+
+    pub async fn create_invite(
+        &self,
+        token: &str,
+        body: &CreateInviteRequest,
+    ) -> Result<CreateInviteResponse> {
+        self.send(Method::POST, "/orgs/invites", Some(token), Some(body))
+            .await
+    }
+
+    pub async fn org_users(&self, token: &str) -> Result<OrgUsersResponse> {
+        self.send::<(), _>(Method::GET, "/orgs/users", Some(token), None)
+            .await
+    }
+
+    pub async fn disable_user(&self, token: &str, user_id: &str) -> Result<()> {
+        let path = format!("/orgs/users/{user_id}/disable");
+        self.send::<(), ()>(Method::POST, &path, Some(token), None)
             .await
     }
 }

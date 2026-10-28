@@ -16,6 +16,7 @@
   import AiPanel from "./AiPanel.svelte";
   import DangerousModeDialog from "./DangerousModeDialog.svelte";
   import AuditLogViewer from "./AuditLogViewer.svelte";
+  import TeamsPage from "./TeamsPage.svelte";
 
   onMount(() => {
     startAiWatcher();
@@ -44,6 +45,7 @@
 <AiPanel />
 <DangerousModeDialog />
 <AuditLogViewer />
+<TeamsPage />
 
 <style>
   .layout {

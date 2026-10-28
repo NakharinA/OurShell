@@ -6,6 +6,8 @@
   export let node: GroupNode;
   export let depth = 0;
   export let filter = "";
+  /** `vault_id -> display name`, for a small badge on a team-vault host. */
+  export let vaultNames: Map<string, string> = new Map();
 
   function matches(name: string): boolean {
     return !filter || name.toLowerCase().includes(filter.toLowerCase());
@@ -25,6 +27,9 @@
       <button class="host-btn" on:click={() => openHostTab(h.id, h.item.name)}>
         <span class="dot" class:ai={h.item.ai_allowed}></span>
         {h.item.name}
+        {#if h.vault_id && vaultNames.get(h.vault_id)}
+          <span class="vault-badge" title="Team vault">{vaultNames.get(h.vault_id)}</span>
+        {/if}
       </button>
       <button class="icon-btn" title="Edit" on:click={() => hostEditor.set({ mode: "edit", record: h })}>
         ✎
@@ -33,7 +38,7 @@
     </div>
   {/each}
   {#each node.children as child (child.group?.id)}
-    <svelte:self node={child} depth={depth + 1} {filter} />
+    <svelte:self node={child} depth={depth + 1} {filter} {vaultNames} />
   {/each}
 </div>
 
@@ -73,6 +78,14 @@
   }
   .dot.ai {
     background: var(--success);
+  }
+  .vault-badge {
+    font-size: 10px;
+    color: var(--text-dim);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 0 6px;
+    margin-left: auto;
   }
   .icon-btn {
     background: transparent;

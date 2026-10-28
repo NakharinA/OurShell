@@ -99,6 +99,9 @@ you really mean to replace it. `--server` also reads `$OURSHELL_SERVER`, and
 master passwords honor `$OURSHELL_PASSWORD` like every other prompt (see
 `docs/agent-protocol.md`).
 
+`ourshell vault passwd` changes the master password (updating the server
+too if signed in -- see "Changing the master password" below).
+
 Two-factor authentication: `ourshell account totp setup` prints an
 `otpauth://` URL and a manual-entry secret; scan or type it into an
 authenticator app, then `ourshell account totp confirm <code>` turns it on
@@ -127,44 +130,89 @@ the cost of tying that session to this one vault file (copying the vault
 file to another machine also copies its session -- revoke the device if
 that's not what you want).
 
+### Changing the master password
+
+`ourshell vault passwd` changes the master password. If the vault isn't
+already unlocked it asks for the current one first (to unlock locally --
+this never leaves the device); the new password is then set locally
+(`Vault::change_password`, a fresh KDF salt) and, if the vault is signed
+in, pushed to the server: a brand-new OPAQUE registration replaces the
+account's password file, and the account's current KDF params and
+wrapped account keys replace the server's copy of them, atomically. Every
+*other* session for that account is revoked in the same step -- the usual
+"signed out everywhere else" behavior of a password change -- so other
+devices need to `ourshell account login` again with the new password
+(logging in refreshes their copy of the account keys from the server).
+The device making the change keeps its own session.
+
+If the network step fails (no connectivity, server down), the master
+password has still changed *locally* -- `ourshell vault passwd` reports
+this and re-running it is safe (it just registers under the same new
+password again).
+
 ### Recovering a vault that is signed in to a server
 
 `ourshell vault recover` resets the master password from the 24-word
-recovery phrase (`Vault::recover`). Locally this regenerates the vault's
-account signing/encryption keypair and re-signs every item with it -- by
-design, so a lost password never requires trusting the old one.
+recovery phrase (`Vault::recover`). A vault created from this point on
+also wraps its account signing/encryption keypair under the recovery key
+(`header.recovery_account_wrap`), so recovering restores the *same*
+account keys instead of generating new ones -- no re-signing, and no
+desync with a sync server or another device, which is the gap this
+closes relative to earlier versions.
 
-If that vault is signed in to a sync server, this is currently a known
-gap: the server (and every other device) still has the **old** account
-keys on file (`enc_public`/`sign_public`/`wrapped_account_keys`/`kdf` in
-the `account_keys` table), and there is no `/v1/...` endpoint to update
-them after the fact -- registration only writes that row once, at signup.
-After a recovery, other devices' `apply_remote` checks will fail to verify
-the signature on anything *this* device pushes afterward (and this device
-will fail to verify items signed before the recovery), because the
-verifying key changed out from under the account. The CLI prints a loud
-warning when this happens. Until a `change_password`/`rotate_keys`
-endpoint exists, the practical workaround is: sign out everywhere
-(`ourshell account logout` on each device), then `ourshell account signup`
-again as if setting up sync for the first time.
+If the vault is signed in, `vault recover` also pushes the (unchanged)
+account keys' current KDF params and wrapped copy to the server in the
+same step `vault passwd` uses, and revokes every other session, exactly
+like a password change -- which is accurate: forgetting your password and
+recovering it is a password reset. This needs a *valid session*, so if
+the session on this device had already expired or been revoked, recovery
+still succeeds locally but the CLI prints a warning instead of silently
+leaving the server on the old password: log in with the OLD password
+first if you still remember it (then run `vault recover` again), or ask
+an org admin to disable (and re-invite) the account if you don't.
+
+**Vaults created before this field existed** have no recovery copy of
+their account keys and fall back to the original behaviour: `recover`
+generates a brand-new account keypair and re-signs every item under it.
+If such a vault is signed in to a server, this is a narrower version of
+the previous known gap: the server (and every other device) still has
+the *old* verifying key on file until you also push the regenerated one
+(the CLI still attempts the same server push, which updates
+`enc_public`/`sign_public` too in this case -- but other already-synced
+devices will fail to verify this device's future signatures, and this
+device will fail to verify theirs, until they also `account login` again
+to pick up the new keys). The practical workaround, as before, is to sign
+out everywhere and sign back in.
 
 ## Scaling to a team
 
 - **Invite-only**: set `INVITE_ONLY=true`. An owner/admin creates codes with
-  `POST /v1/orgs/invites` (optionally `{"role": "Admin"}`); each code is
-  single-use.
-- **Admin panel (API)**: `GET /v1/orgs/users` lists everyone in the org;
-  `POST /v1/orgs/users/{id}/disable` disables an account and kills its
+  `ourshell org invite` (`POST /v1/orgs/invites`, optionally
+  `{"role": "admin"}`); each code is single-use.
+- **Admin panel**: `ourshell org users` (`GET /v1/orgs/users`) lists
+  everyone in the org; `ourshell org disable <user-id>`
+  (`POST /v1/orgs/users/{id}/disable`) disables an account and kills its
   sessions.
-- **Team vaults**: any member can create one with `POST /v1/vaults`,
-  sealing a copy of the vault key to each initial member's public key
-  client-side (the server only ever stores the sealed bytes). Look up a
-  teammate's public keys first with `GET /v1/users/{email}/public-keys`.
-  Existing members add others with `POST /v1/vaults/{vault_id}/members` and
-  remove them with `DELETE /v1/vaults/{vault_id}/members/{user_id}`.
-- **Audit log**: every login, device add/revoke, and vault share/unshare is
-  recorded in the `events` table (time, org, user, kind) -- never secret
-  contents.
+- **Team vaults**: `ourshell team create <name> [--member email]...`
+  generates a vault key client-side and seals a copy to yourself and each
+  named member's public key (looked up with
+  `GET /v1/users/{email}/public-keys`), then `POST /v1/vaults` (the server
+  only ever stores the sealed bytes). `ourshell team ls` lists every vault
+  (personal and team) this account can open; `ourshell host ls` shows
+  which vault each host lives in. Existing members add others with
+  `ourshell team add-member <team> <email>`
+  (`POST /v1/vaults/{vault_id}/members`) and remove them with
+  `ourshell team remove-member <team> <email>`
+  (`DELETE /vaults/{vault_id}/members/{user_id}`) -- removing a member
+  also *rotates* the vault's key (a fresh key, re-sealed to every
+  remaining member, every item re-saved under it), so the removed member
+  -- and any device that hasn't synced since -- can no longer decrypt
+  anything pushed from that point on. `ourshell team share <host> <team>`
+  moves a personal item into a team vault (under a new id -- see
+  `docs/blob-format.md`).
+- **Audit log**: every login, device add/revoke, password change, and
+  vault create/share/unshare is recorded in the `events` table (time,
+  org, user, kind) -- never secret contents.
 
 ## API reference
 
@@ -183,12 +231,15 @@ for exact request/response shapes). Authenticated endpoints take
 | `POST /totp/setup` | session | |
 | `POST /totp/confirm` | session | |
 | `POST /totp/disable` | session | |
+| `GET /account/vaults` | session | refreshes the caller's vault list (picks up a new team membership, or a removal, without a fresh login) |
+| `POST /account/password/start` / `/finish` | session | `ourshell vault passwd` / `vault recover` while signed in; fresh OPAQUE registration for the current user, replaces `kdf`/`wrapped_account_keys`/public keys/recovery wrap, revokes every *other* session |
 | `GET /vaults/{vault_id}/items?since=<cursor>` | session, vault member | pull |
 | `POST /vaults/{vault_id}/items` | session, vault member | push; optimistic concurrency (`ok` or `conflict` per item) |
 | `POST /orgs/invites` | session, admin/owner | |
 | `GET /orgs/users` | session, admin/owner | |
 | `POST /orgs/users/{user_id}/disable` | session, admin/owner | |
 | `POST /vaults` | session | create a team vault |
+| `GET /vaults/{vault_id}/members` | session, vault member | every current member's public keys (verify signatures, reseal on rotation) |
 | `POST /vaults/{vault_id}/members` | session, vault member | |
 | `DELETE /vaults/{vault_id}/members/{user_id}` | session, vault member | |
 | `GET /users/{email}/public-keys` | session, same org | |
