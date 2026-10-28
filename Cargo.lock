@@ -1130,6 +1130,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hkdf",
  "ourshell-proto",
+ "rand",
  "rusqlite",
  "russh",
  "russh-sftp",
