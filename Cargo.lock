@@ -1156,7 +1156,9 @@ dependencies = [
 name = "ourshell-proto"
 version = "0.0.1"
 dependencies = [
+ "base64",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
