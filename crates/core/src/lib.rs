@@ -3,6 +3,8 @@
 //! Every front-end (CLI, desktop, MCP) reaches this code through the local agent,
 //! so the security-critical logic lives in exactly one place.
 
+#![forbid(unsafe_code)]
+
 pub mod crypto;
 pub mod import;
 pub mod keygen;
