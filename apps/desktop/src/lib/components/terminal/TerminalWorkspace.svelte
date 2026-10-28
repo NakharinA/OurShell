@@ -14,14 +14,19 @@
   {:else}
     <div class="tabbar">
       {#each $tabs as tab (tab.id)}
-        <button
-          class="tab"
-          class:active={tab.id === activeTab?.id}
-          on:click={() => activeTabId.set(tab.id)}
-        >
-          <span>{tab.title}</span>
-          <span class="close" on:click|stopPropagation={() => closeTab(tab.id)}>✕</span>
-        </button>
+        <div class="tab" class:active={tab.id === activeTab?.id}>
+          <button type="button" class="tab-select" on:click={() => activeTabId.set(tab.id)}>
+            <span>{tab.title}</span>
+          </button>
+          <button
+            type="button"
+            class="close"
+            on:click|stopPropagation={() => closeTab(tab.id)}
+            aria-label={`Close ${tab.title}`}
+          >
+            ✕
+          </button>
+        </div>
       {/each}
     </div>
     <div class="content">
@@ -52,19 +57,47 @@
     background: var(--bg-sunken);
     overflow-x: auto;
   }
+  /* `.tab` used to be the clickable element (a <button>), styled by the
+     global `button` rule in app.css plus the overrides below. Now that it
+     wraps two real buttons (select + close, so the close control isn't a
+     button nested inside another button), it carries those same visual
+     styles itself; the inner buttons are reset to look like plain inline
+     content. */
   .tab {
     display: flex;
     align-items: center;
     gap: 8px;
+    font: inherit;
+    color: var(--text);
+    border: 1px solid var(--panel-border);
     border-radius: 6px 6px 0 0;
     border-bottom: none;
     background: var(--bg-elevated);
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  .tab:hover {
+    background: var(--hover-bg);
   }
   .tab.active {
     background: var(--bg);
     border-color: var(--accent);
   }
+  .tab-select {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+  }
   .close {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
     opacity: 0.6;
   }
   .close:hover {

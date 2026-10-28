@@ -64,10 +64,12 @@
   }
 </script>
 
+<svelte:window on:keydown={(e) => $showImport && e.key === "Escape" && close()} />
+
 {#if $showImport}
-  <div class="modal-backdrop" on:click={close}>
-    <div class="modal" on:click|stopPropagation>
-      <h2>Import</h2>
+  <div class="modal-backdrop" role="presentation" on:click|self={close}>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
+      <h2 id="import-title">Import</h2>
       <div class="row tabs">
         <button class:active={kind === "ssh_config"} on:click={() => (kind = "ssh_config")}>
           ~/.ssh/config

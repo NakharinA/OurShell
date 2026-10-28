@@ -1,6 +1,7 @@
 <script lang="ts">
   import { rpc } from "../rpc";
   import { refreshVaultStatus } from "../stores/vault";
+  import { autofocus } from "../actions/autofocus";
 
   let password = "";
   let busy = false;
@@ -28,7 +29,7 @@
     <p class="text-dim">Enter your master password to unlock the vault.</p>
     <label>
       Master password
-      <input type="password" bind:value={password} autofocus />
+      <input type="password" bind:value={password} use:autofocus />
     </label>
     {#if error}
       <p class="error">{error}</p>

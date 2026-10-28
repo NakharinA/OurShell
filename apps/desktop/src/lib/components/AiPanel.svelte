@@ -44,11 +44,13 @@
   }
 </script>
 
+<svelte:window on:keydown={(e) => $showAiPanel && e.key === "Escape" && close()} />
+
 {#if $showAiPanel}
-  <div class="modal-backdrop" on:click={close}>
-    <div class="modal wide" on:click|stopPropagation>
+  <div class="modal-backdrop" role="presentation" on:click|self={close}>
+    <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="ai-panel-title">
       <div class="row">
-        <h2>AI</h2>
+        <h2 id="ai-panel-title">AI</h2>
         <span class="spacer"></span>
         <button on:click={() => showAuditLog.set(true)}>Audit log</button>
         <button class="danger" on:click={stopAll} disabled={busy}>Stop all AI</button>

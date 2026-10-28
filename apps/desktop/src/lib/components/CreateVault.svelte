@@ -1,6 +1,7 @@
 <script lang="ts">
   import { rpc } from "../rpc";
   import { refreshVaultStatus } from "../stores/vault";
+  import { autofocus } from "../actions/autofocus";
 
   type Step = "form" | "recovery";
   let step: Step = "form";
@@ -55,7 +56,7 @@
       </p>
       <label>
         Master password
-        <input type="password" bind:value={password} autofocus />
+        <input type="password" bind:value={password} use:autofocus />
       </label>
       <label>
         Confirm password
