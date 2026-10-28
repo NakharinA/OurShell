@@ -6,5 +6,11 @@ dist/
 *.db
 *.sqlite
 .DS_Store
-apps/desktop/src-tauri/binaries/
 .claude/
+
+# apps/desktop (Vite + Svelte frontend, Tauri 2 Rust shell)
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/gen/
