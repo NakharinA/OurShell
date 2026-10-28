@@ -1,0 +1,9 @@
+/target/
+**/target/
+node_modules/
+dist/
+.env
+*.db
+*.sqlite
+.DS_Store
+apps/desktop/src-tauri/binaries/
