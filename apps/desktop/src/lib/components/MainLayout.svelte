@@ -4,6 +4,7 @@
   import { startAiWatcher } from "../stores/ai";
   import Sidebar from "./Sidebar.svelte";
   import TopBanner from "./TopBanner.svelte";
+  import UpdateBanner from "./UpdateBanner.svelte";
   import TerminalWorkspace from "./terminal/TerminalWorkspace.svelte";
   import HostEditor from "./HostEditor.svelte";
   import IdentitiesPage from "./IdentitiesPage.svelte";
@@ -24,6 +25,7 @@
 
 <div class="layout">
   <TopBanner />
+  <UpdateBanner />
   <div class="body">
     <Sidebar />
     <main class="content">

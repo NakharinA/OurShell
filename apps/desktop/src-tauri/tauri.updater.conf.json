@@ -1,0 +1,34 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "bundle": {
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_THE_OUTPUT_OF_tauri_signer_generate_PUBLIC_KEY",
+      "endpoints": [
+        "https://github.com/NakharinA/OurShell/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
+  "app": {
+    "security": {
+      "capabilities": [
+        "default",
+        {
+          "identifier": "updater",
+          "windows": [
+            "main"
+          ],
+          "permissions": [
+            "updater:default",
+            "process:allow-restart"
+          ]
+        }
+      ]
+    }
+  }
+}

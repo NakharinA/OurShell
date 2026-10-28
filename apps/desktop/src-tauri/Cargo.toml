@@ -40,9 +40,15 @@ interprocess = { version = "2", features = ["tokio"] }
 anyhow = "1"
 thiserror = "2"
 log = "0.4"
+tauri-plugin-updater = { version = "2", optional = true }
+tauri-plugin-process = { version = "2", optional = true }
 
 [profile.release]
 panic = "abort"
 codegen-units = 1
 lto = true
 opt-level = "s"
+
+[features]
+# Enabled by the release workflow together with tauri.updater.conf.json.
+updater = ["dep:tauri-plugin-updater", "dep:tauri-plugin-process"]
