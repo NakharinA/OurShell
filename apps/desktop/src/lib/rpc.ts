@@ -46,6 +46,8 @@ import {
   type VaultInitParams,
   type VaultInitResult,
   type VaultStatus,
+  type ImportReport,
+  type KeyResult,
 } from "./types";
 
 // ----- base64 helpers (PTY bytes / file contents travel as base64 strings) -----
@@ -167,19 +169,19 @@ class AgentClient {
 
   // ----- keys -----
 
-  keyGenerate(params: KeyGenerateParams): Promise<ItemRecord> {
+  keyGenerate(params: KeyGenerateParams): Promise<KeyResult> {
     return this.call(Method.KEY_GENERATE, params);
   }
-  keyImport(params: KeyImportParams): Promise<ItemRecord> {
+  keyImport(params: KeyImportParams): Promise<KeyResult> {
     return this.call(Method.KEY_IMPORT, params);
   }
 
   // ----- import -----
 
-  importSshConfig(params: ImportFileParams): Promise<unknown> {
+  importSshConfig(params: ImportFileParams): Promise<ImportReport> {
     return this.call(Method.IMPORT_SSH_CONFIG, params);
   }
-  importTermiusCsv(params: ImportFileParams): Promise<unknown> {
+  importTermiusCsv(params: ImportFileParams): Promise<ImportReport> {
     return this.call(Method.IMPORT_TERMIUS_CSV, params);
   }
 

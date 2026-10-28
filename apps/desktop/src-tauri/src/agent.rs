@@ -116,13 +116,20 @@ async fn actor_loop(app: AppHandle, mut cmd_rx: mpsc::UnboundedReceiver<Cmd>) {
     }
 }
 
-/// The agent's local socket path, per `docs/agent-protocol.md`.
+/// The agent's local socket path, per `docs/agent-protocol.md`. Must match
+/// `crates/cli/src/ipc.rs`, including the `OURSHELL_AGENT_SOCKET` override.
 fn socket_path() -> String {
+    if let Ok(s) = std::env::var("OURSHELL_AGENT_SOCKET") {
+        if cfg!(windows) && !s.starts_with(r"\\") {
+            return format!(r"\\.\pipe\{s}");
+        }
+        return s;
+    }
     #[cfg(windows)]
     {
         let user = std::env::var("USERNAME")
             .or_else(|_| std::env::var("USER"))
-            .unwrap_or_else(|_| "default".to_string());
+            .unwrap_or_else(|_| "user".to_string());
         format!(r"\\.\pipe\ourshell-agent-{user}")
     }
     #[cfg(not(windows))]

@@ -438,3 +438,21 @@ export interface AgentStatusPayload {
   connected: boolean;
   detail: string;
 }
+
+/** Result of `key.generate` / `key.import`. */
+export interface KeyResult {
+  id: string;
+  public_key: string;
+  fingerprint: string;
+  algorithm?: string;
+}
+
+/** Result of `import.ssh_config` / `import.termius_csv`. */
+export interface ImportReport {
+  hosts_added: number;
+  hosts_skipped: string[];
+  keys_added: number;
+  identities_added: number;
+  groups_added: number;
+  warnings: string[];
+}

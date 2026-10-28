@@ -1,4 +1,18 @@
 <script lang="ts">
+  import type { ImportReport } from "../types";
+  function summarize(r: ImportReport): string {
+    const parts = [
+      `${r.hosts_added} host${r.hosts_added === 1 ? "" : "s"}`,
+      `${r.keys_added} key${r.keys_added === 1 ? "" : "s"}`,
+      `${r.identities_added} identit${r.identities_added === 1 ? "y" : "ies"}`,
+      `${r.groups_added} group${r.groups_added === 1 ? "" : "s"}`,
+    ];
+    let msg = `Imported ${parts.join(", ")}.`;
+    if (r.hosts_skipped.length) msg += ` Skipped existing: ${r.hosts_skipped.join(", ")}.`;
+    if (r.warnings.length) msg += ` Warnings: ${r.warnings.join("; ")}`;
+    return msg;
+  }
+
   import { rpc } from "../rpc";
   import { refreshAllItems } from "../stores/items";
   import { showImport } from "../stores/ui";
@@ -32,9 +46,7 @@
         kind === "ssh_config"
           ? await rpc.importSshConfig({ contents, base_dir: baseDir || null })
           : await rpc.importTermiusCsv({ contents });
-      resultSummary = Array.isArray(result)
-        ? `Imported ${result.length} item${result.length === 1 ? "" : "s"}.`
-        : "Import finished.";
+      resultSummary = summarize(result);
       await refreshAllItems();
     } catch (err) {
       error = (err as Error).message ?? "Import failed.";

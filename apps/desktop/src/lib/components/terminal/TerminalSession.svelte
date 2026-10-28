@@ -51,10 +51,10 @@
     } catch (err) {
       const e = err as { code?: number; message?: string; data?: unknown };
       if (e.code === ErrorCode.HOST_KEY_UNKNOWN) {
-        hostKeyPrompt = { fingerprint: String(e.data ?? "unknown"), mismatch: false };
+        hostKeyPrompt = { fingerprint: hostKeyField(e.data, "fingerprint"), mismatch: false };
         status = "error";
       } else if (e.code === ErrorCode.HOST_KEY_MISMATCH) {
-        hostKeyPrompt = { fingerprint: String(e.data ?? "unknown"), mismatch: true };
+        hostKeyPrompt = { fingerprint: hostKeyField(e.data, "host_port"), mismatch: true };
         status = "error";
         term.write(
           `\r\n\x1b[31mHost key mismatch for ${hostName}: the server's key changed. Refusing to connect.\x1b[0m\r\n`,
@@ -65,6 +65,14 @@
         term.write(`\r\n\x1b[31mFailed to connect: ${errorMessage}\x1b[0m\r\n`);
       }
     }
+  }
+
+  /** Agent error data is `{host_port, key, fingerprint}` (see crates/cli/src/agent/ssh_ops.rs). */
+  function hostKeyField(data: unknown, field: "fingerprint" | "host_port"): string {
+    if (data && typeof data === "object" && field in data) {
+      return String((data as Record<string, unknown>)[field]);
+    }
+    return typeof data === "string" ? data : "unknown";
   }
 
   function acceptHostKey(): void {
