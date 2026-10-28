@@ -1,0 +1,53 @@
+# OurShell self-hosted sync server. See docs/self-hosting.md.
+#
+#   cp .env.example .env   # fill in SERVER_MASTER_KEY, POSTGRES_PASSWORD, ...
+#   docker compose up -d
+#
+# This same image scales to a company deployment by changing the .env file
+# (SIGNUPS_ENABLED, INVITE_ONLY, OIDC_*, an external DATABASE_URL, ...), not
+# the code.
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ourshell}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-ourshell}
+    volumes:
+      - ourshell-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ourshell} -d ${POSTGRES_DB:-ourshell}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://ourshell:${POSTGRES_PASSWORD}@postgres:5432/ourshell}
+      BIND_ADDR: 0.0.0.0:8443
+      SERVER_MASTER_KEY: ${SERVER_MASTER_KEY:?set SERVER_MASTER_KEY in .env (openssl rand -base64 32)}
+      OPAQUE_SERVER_SETUP: ${OPAQUE_SERVER_SETUP:-}
+      SIGNUPS_ENABLED: ${SIGNUPS_ENABLED:-true}
+      INVITE_ONLY: ${INVITE_ONLY:-false}
+      MAX_DEVICES_PER_USER: ${MAX_DEVICES_PER_USER:-10}
+      RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-30}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-720}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${OURSHELL_PORT:-8443}:8443"
+
+volumes:
+  ourshell-postgres-data:
