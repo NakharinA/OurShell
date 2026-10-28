@@ -7,6 +7,8 @@ pub mod model;
 
 use std::path::{Path, PathBuf};
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -172,6 +174,32 @@ impl Vault {
             vault: v,
             recovery_phrase: Zeroizing::new(recovery::to_words(&recovery_key)),
         })
+    }
+
+    /// Creates a new vault file from account/vault material already issued
+    /// by a sync server (used when logging in on a new device: no local
+    /// account keys or vault key need to be generated, they come from the
+    /// server's wrapped/sealed copies). Returned locked; callers unlock
+    /// with the master password to prove the material round-trips.
+    pub fn create_from_header(path: &Path, header: Header) -> Result<Self> {
+        if path.exists() {
+            return Err(VaultError::Exists(path.into()));
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| {
+                VaultError::Db(rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+            })?;
+        }
+        let conn = Connection::open(path)?;
+        conn.execute_batch(SCHEMA)?;
+        let mut v = Self {
+            path: path.into(),
+            conn,
+            header,
+            unlocked: None,
+        };
+        v.save_header()?;
+        Ok(v)
     }
 
     /// Opens an existing vault in the locked state.
@@ -467,10 +495,80 @@ impl Vault {
         Ok(true)
     }
 
+    /// Forcibly stores a remote envelope as this item's current version,
+    /// bypassing the "only if strictly newer" check in [`Self::apply_remote`].
+    /// Used after a push conflict: the server's copy is authoritative even
+    /// though the local and remote version numbers can coincide (both were
+    /// bumped independently from the same base version by different
+    /// devices). Still verifies the signature before storing.
+    pub fn force_apply_remote(&mut self, env: &ItemEnvelope, deleted: bool) -> Result<()> {
+        let u = self.keys()?;
+        let verifying = self.header.account_public.verifying()?;
+        env.open(&u.vault_key, &verifying)?;
+        self.store_envelope(env, deleted, false)
+    }
+
     /// Stores a raw plaintext under an explicit id/kind as a new local version
     /// (used for conflict copies during sync).
     pub fn put_plain(&mut self, id: &str, kind: &str, plaintext: &[u8]) -> Result<()> {
         self.put_raw(id, kind, plaintext, false)
+    }
+
+    const SECRET_META_PREFIX: &'static str = "secret:";
+    const SECRET_META_AAD_PREFIX: &'static str = "ourshell:meta:";
+
+    /// Stores `bytes` encrypted under the vault key, keyed by `key`, in this
+    /// vault's own `meta` table. For client-only state that must never
+    /// leave the device (e.g. sync session tokens) -- never synced, unlike
+    /// `items`.
+    pub fn set_secret_meta(&mut self, key: &str, bytes: &[u8]) -> Result<()> {
+        let u = self.keys()?;
+        let aad = format!("{}{key}", Self::SECRET_META_AAD_PREFIX);
+        let enc = crate::crypto::aead::encrypt(&u.vault_key, bytes, aad.as_bytes())?;
+        self.conn.execute(
+            "INSERT INTO meta (k, v) VALUES (?1, ?2)
+             ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            params![
+                format!("{}{key}", Self::SECRET_META_PREFIX),
+                STANDARD.encode(enc)
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Reads back a value stored with [`Self::set_secret_meta`], or `None`
+    /// if never set.
+    pub fn get_secret_meta(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        let u = self.keys()?;
+        let row: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT v FROM meta WHERE k = ?1",
+                params![format!("{}{key}", Self::SECRET_META_PREFIX)],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(encoded) = row else {
+            return Ok(None);
+        };
+        let enc = STANDARD
+            .decode(&encoded)
+            .map_err(|_| VaultError::Crypto(CryptoError::Format))?;
+        let aad = format!("{}{key}", Self::SECRET_META_AAD_PREFIX);
+        Ok(Some(crate::crypto::aead::decrypt(
+            &u.vault_key,
+            &enc,
+            aad.as_bytes(),
+        )?))
+    }
+
+    /// Removes a value stored with [`Self::set_secret_meta`].
+    pub fn delete_secret_meta(&mut self, key: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM meta WHERE k = ?1",
+            params![format!("{}{key}", Self::SECRET_META_PREFIX)],
+        )?;
+        Ok(())
     }
 
     /// Decrypts any envelope with this vault's keys.

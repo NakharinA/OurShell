@@ -7,6 +7,7 @@ mod ai;
 mod items;
 pub mod policy;
 pub mod ssh_ops;
+mod sync_ops;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -218,9 +219,23 @@ pub async fn run(opts: AgentOptions) -> Result<()> {
     Ok(())
 }
 
+/// `$OURSHELL_AUTOSYNC_SECS`, parsed once at startup: how often the agent
+/// runs a background `sync.run` while unlocked and signed in. `0` disables
+/// it (the default is still to sync -- `ourshell sync` or `account login`
+/// users who want no background network traffic should set this to `0`).
+fn autosync_interval() -> Option<Duration> {
+    let secs: u64 = std::env::var("OURSHELL_AUTOSYNC_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(300);
+    (secs > 0).then(|| Duration::from_secs(secs))
+}
+
 fn spawn_timers(state: Arc<State>) {
+    let autosync = autosync_interval();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(1));
+        let mut last_autosync = Instant::now();
         loop {
             tick.tick().await;
             let expired = {
@@ -231,6 +246,12 @@ fn spawn_timers(state: Arc<State>) {
             if expired {
                 tracing::info!("auto-locking vault");
                 state.lock().await;
+            }
+            if let Some(every) = autosync {
+                if last_autosync.elapsed() >= every {
+                    last_autosync = Instant::now();
+                    sync_ops::autosync_tick(&state).await;
+                }
             }
             if let Some(idle) = state.opts.idle_exit {
                 let unlocked = state
@@ -454,6 +475,9 @@ pub async fn dispatch(
         }
         m if m.starts_with("item.") || m.starts_with("key.") || m.starts_with("import.") => {
             items::dispatch(state, m, params).await
+        }
+        m if m.starts_with("account.") || m.starts_with("sync.") || m == method::VAULT_RECOVER => {
+            sync_ops::dispatch(state, m, params).await
         }
         _ => Err(err(
             rpc::METHOD_NOT_FOUND,

@@ -10,6 +10,75 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "ourshell_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ourshell-server"
+path = "src/main.rs"
+
+[features]
+default = ["oidc"]
+# Real OpenID Connect sign-in (discovery + authorization code flow). Its
+# dependency tree (reqwest + rustls) uses the `ring` crypto provider, never
+# aws-lc-sys, so it is on by default. Disable it to drop openidconnect/oauth2
+# entirely; the /v1/oidc/* routes then return 501.
+oidc = ["dep:openidconnect"]
+
 [dependencies]
 ourshell-proto.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["trace", "limit"] }
+
+# We deliberately depend on sqlx-core + sqlx-postgres directly instead of
+# the `sqlx` facade crate -- see `src/sqlx.rs` for why (a Cargo resolver
+# `links = "sqlite3"` conflict with ourshell-core's bundled rusqlite that
+# the facade's feature graph triggers even with sqlite never enabled).
+# `_rt-tokio` / `_tls-rustls-ring-webpki` are sqlx-core's internal names for
+# what the facade calls `runtime-tokio` / `tls-rustls-ring`. We never use
+# the `query!`/`query_as!`/`derive(FromRow)`/`sqlx::migrate!` compile-time
+# macros (runtime `query`/`query_as` and `migrate::Migrator::new(path)`
+# instead), so no "macros" feature anywhere.
+sqlx-core = { version = "0.9", default-features = false, features = [
+    "_rt-tokio",
+    "_tls-rustls-ring-webpki",
+    "migrate",
+    "chrono",
+    "uuid",
+] }
+sqlx-postgres = { version = "0.9", default-features = false, features = [
+    "chrono",
+    "uuid",
+    "migrate",
+] }
+
+# Must match the `rand` major version opaque-ke (pulled in via
+# ourshell-proto's `opaque` feature) uses, so `rand::rngs::OsRng` satisfies
+# its `RngCore + CryptoRng` bounds.
+rand = "0.8"
+
+chacha20poly1305 = "0.11.0"
+sha2 = "0.10"
+base64 = "0.23.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+zeroize = { version = "1.9.1", features = ["derive"] }
+totp-rs = { version = "6", features = ["otpauth"] }
+base32 = "0.5"
+
+# Optional OIDC sign-in. rustls-tls (the default feature) uses `ring`.
+openidconnect = { version = "4", optional = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

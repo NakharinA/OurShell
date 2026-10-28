@@ -1,6 +1,8 @@
 //! Wire types shared by OurShell clients and the sync server.
 
 pub mod agent;
+#[cfg(feature = "opaque")]
+pub mod opaque;
 pub mod rpc;
 pub mod sync;
 
