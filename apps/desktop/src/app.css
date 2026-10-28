@@ -1,0 +1,207 @@
+/* OurShell desktop theme. Dark by default; `data-theme="light"` on <html> for
+   the light theme. Keep all colors as variables so components never hardcode
+   a color. */
+
+:root {
+  --bg: #16171d;
+  --bg-elevated: #1c1e26;
+  --bg-sunken: #0f1014;
+  --panel-border: #2e303a;
+  --text: #c7c9d1;
+  --text-dim: #868a9a;
+  --text-heading: #f3f4f6;
+  --accent: #7aa2f7;
+  --accent-contrast: #0b1020;
+  --danger: #ef4444;
+  --danger-bg: rgba(239, 68, 68, 0.15);
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --input-bg: #11121a;
+  --hover-bg: rgba(255, 255, 255, 0.06);
+  --selected-bg: rgba(122, 162, 247, 0.18);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  --radius: 6px;
+}
+
+:root[data-theme='light'] {
+  --bg: #f5f6f8;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #e9eaee;
+  --panel-border: #d8dae0;
+  --text: #2b2d33;
+  --text-dim: #6b6f7a;
+  --text-heading: #0c0d10;
+  --accent: #2f5fd7;
+  --accent-contrast: #ffffff;
+  --danger: #dc2626;
+  --danger-bg: rgba(220, 38, 38, 0.1);
+  --success: #16a34a;
+  --warning: #d97706;
+  --input-bg: #ffffff;
+  --hover-bg: rgba(0, 0, 0, 0.05);
+  --selected-bg: rgba(47, 95, 215, 0.12);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font: 14px/1.5 var(--sans);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--text-heading);
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+button:hover {
+  background: var(--hover-bg);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+button.primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+button.danger {
+  background: var(--danger);
+  color: white;
+  border-color: var(--danger);
+}
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--input-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+}
+
+a {
+  color: var(--accent);
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+}
+
+.scroll {
+  overflow: auto;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.text-dim {
+  color: var(--text-dim);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: var(--bg-elevated);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 20px;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow: auto;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+th,
+td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--panel-border);
+}
+th {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--panel-border);
+  border-radius: 5px;
+}

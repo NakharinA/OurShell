@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = ["."]
+
+[package]
+name = "ourshell-desktop"
+description = "OurShell desktop app (Tauri 2 shell over the local agent)"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/NakharinA/OurShell"
+rust-version = "1.85"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "ourshell_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "ourshell-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+ourshell-proto = { path = "../../../crates/proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "time", "process"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-log = "2"
+interprocess = { version = "2", features = ["tokio"] }
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
