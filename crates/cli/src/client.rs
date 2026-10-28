@@ -174,6 +174,7 @@ fn spawn_agent() -> Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        stop_std_handle_inheritance();
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -181,6 +182,29 @@ fn spawn_agent() -> Result<()> {
     }
     cmd.spawn().context("failed to start agent")?;
     Ok(())
+}
+
+/// Windows children inherit every inheritable handle, including this process's
+/// stdio pipes. A long-lived agent holding them would keep `ourshell ... | findstr`
+/// pipelines (and test harnesses) waiting for EOF forever, so clear the flag first.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn stop_std_handle_inheritance() {
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        // SAFETY: GetStdHandle has no preconditions; SetHandleInformation only
+        // changes the inherit flag of a handle owned by this process and fails
+        // harmlessly on null/invalid handles.
+        unsafe {
+            let h = GetStdHandle(which);
+            if !h.is_null() {
+                SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+    }
 }
 
 /// The `ourshell` binary: env override, this executable if it is `ourshell`, a sibling, or PATH.

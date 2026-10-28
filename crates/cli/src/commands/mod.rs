@@ -1,6 +1,7 @@
 //! `ourshell` command-line interface.
 
 mod items;
+mod ssh;
 
 use std::path::PathBuf;
 
@@ -43,6 +44,33 @@ pub enum Command {
     /// Manage snippets.
     #[command(subcommand)]
     Snippet(items::SnippetCmd),
+    /// Open an interactive shell on a saved host.
+    Connect {
+        host: String,
+        /// Forward your local ssh-agent to the host.
+        #[arg(short = 'A', long)]
+        agent_forwarding: bool,
+    },
+    /// Run one command on a saved host.
+    Exec {
+        host: String,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
+    /// Transfer files with SFTP.
+    #[command(subcommand)]
+    Sftp(ssh::SftpCmd),
+    /// Port forwarding.
+    #[command(subcommand)]
+    Forward(ssh::ForwardCmd),
+    /// Generate, import and list SSH keys.
+    #[command(subcommand)]
+    Key(ssh::KeyCmd),
+    /// Import hosts from ~/.ssh/config or a Termius CSV.
+    #[command(subcommand)]
+    Import(ssh::ImportCmd),
     /// Run the local agent in the foreground (normally started on demand).
     Agent {
         /// Vault file (default: ~/.ourshell/vault.db or $OURSHELL_VAULT).
@@ -139,6 +167,19 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Host(cmd) => items::host(cmd, cli.json).await,
         Command::Identity(cmd) => items::identity(cmd, cli.json).await,
         Command::Snippet(cmd) => items::snippet(cmd, cli.json).await,
+        Command::Connect {
+            host,
+            agent_forwarding,
+        } => ssh::connect(host, agent_forwarding).await,
+        Command::Exec {
+            host,
+            command,
+            timeout,
+        } => ssh::exec(host, command, timeout, cli.json).await,
+        Command::Sftp(cmd) => ssh::sftp(cmd, cli.json).await,
+        Command::Forward(cmd) => ssh::forward(cmd, cli.json).await,
+        Command::Key(cmd) => ssh::key(cmd, cli.json).await,
+        Command::Import(cmd) => ssh::import(cmd, cli.json).await,
     }
 }
 
