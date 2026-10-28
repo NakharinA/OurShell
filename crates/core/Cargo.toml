@@ -34,6 +34,33 @@ uuid = { version = "1.26.1", features = ["v4", "serde"] }
 x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 zeroize = { version = "1.9.1", features = ["derive"] }
 
+# Sync client HTTP transport. `rustls-tls` (not `default-tls`/`native-tls`)
+# so it uses rustls; matching `rustls-tls` feature choice as the server's
+# optional OIDC client (see `server/Cargo.toml`) resolves `rustls` with the
+# pure-Rust `ring` crypto provider, never `aws-lc-sys`.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
+
 [dev-dependencies]
 rand = "0.10"
 tempfile = "3.27.0"
+# Sync end-to-end test only (`tests/sync_e2e.rs`): boots the real sync
+# server in-process against a test Postgres. Same `sqlx-core`/`sqlx-postgres`
+# version and feature set as `server/Cargo.toml` so they resolve to one
+# already-built copy instead of two.
+ourshell-server = { path = "../../server" }
+axum = "0.8"
+sqlx-core = { version = "0.9", default-features = false, features = [
+    "_rt-tokio",
+    "_tls-rustls-ring-webpki",
+    "migrate",
+    "chrono",
+    "uuid",
+] }
+sqlx-postgres = { version = "0.9", default-features = false, features = [
+    "chrono",
+    "uuid",
+    "migrate",
+] }

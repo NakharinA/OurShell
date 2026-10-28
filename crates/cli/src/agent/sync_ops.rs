@@ -1,0 +1,315 @@
+//! `account.*`, `sync.*` and `vault.recover` handlers.
+//!
+//! Signup/login/sync talk to the server while holding the agent's vault
+//! lock for the whole call (these are rare, user-initiated actions, unlike
+//! the hot-path `item.*` handlers), so no other request can observe a
+//! half-updated vault mid-sync.
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use ourshell_core::sync::{self, SyncError, SyncSession};
+use ourshell_core::vault::{Vault, VaultError};
+use ourshell_proto::agent::{
+    event, method, AccountLoginParams, AccountSignupParams, AccountStatus, DeviceRef, SyncParams,
+    SyncReport, TotpCodeParams, VaultRecoverParams,
+};
+use ourshell_proto::rpc::{self, RpcError};
+use ourshell_proto::sync::{DeviceInfo, TotpSetupResponse};
+use serde_json::{json, Value};
+
+use super::{err, parse, to_value, vault_err, RpcResult, State};
+
+pub async fn dispatch(state: &Arc<State>, m: &str, params: Value) -> RpcResult {
+    match m {
+        method::ACCOUNT_SIGNUP => account_signup(state, parse(params)?).await,
+        method::ACCOUNT_LOGIN => account_login(state, parse(params)?).await,
+        method::ACCOUNT_LOGOUT => account_logout(state).await,
+        method::ACCOUNT_STATUS => account_status(state).await,
+        method::ACCOUNT_DEVICES => account_devices(state).await,
+        method::ACCOUNT_REVOKE_DEVICE => {
+            let p: DeviceRef = parse(params)?;
+            account_revoke_device(state, p).await
+        }
+        method::ACCOUNT_TOTP_SETUP => account_totp_setup(state).await,
+        method::ACCOUNT_TOTP_CONFIRM => {
+            let p: TotpCodeParams = parse(params)?;
+            account_totp_confirm(state, p).await
+        }
+        method::ACCOUNT_TOTP_DISABLE => {
+            let p: TotpCodeParams = parse(params)?;
+            account_totp_disable(state, p).await
+        }
+        method::SYNC_RUN => {
+            let p: SyncParams = parse(params)?;
+            sync_run(state, p).await
+        }
+        method::VAULT_RECOVER => {
+            let p: VaultRecoverParams = parse(params)?;
+            vault_recover(state, p).await
+        }
+        _ => Err(err(rpc::METHOD_NOT_FOUND, format!("unknown method `{m}`"))),
+    }
+}
+
+fn default_device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "ourshell-device".to_string())
+}
+
+fn sync_err(e: SyncError) -> RpcError {
+    match e {
+        SyncError::Api {
+            status,
+            code,
+            message,
+        } => err(
+            rpc::INVALID_PARAMS,
+            format!("sync server rejected the request ({status} {code}): {message}"),
+        ),
+        SyncError::Http(e) => err(
+            rpc::INTERNAL_ERROR,
+            format!("could not reach the sync server: {e}"),
+        ),
+        SyncError::Vault(e) => vault_err(e),
+        other => err(rpc::INTERNAL_ERROR, other.to_string()),
+    }
+}
+
+fn report_of(r: sync::SyncReport) -> SyncReport {
+    SyncReport {
+        pushed: r.pushed,
+        pulled: r.pulled,
+        conflicts: r.conflicts,
+    }
+}
+
+fn status_from(session: Option<&SyncSession>) -> AccountStatus {
+    match session {
+        Some(s) => AccountStatus {
+            signed_in: true,
+            server: Some(s.server_url.clone()),
+            email: Some(s.email.clone()),
+            device_id: Some(s.device_id.clone()),
+            last_sync: s.last_sync.clone(),
+        },
+        None => AccountStatus {
+            signed_in: false,
+            server: None,
+            email: None,
+            device_id: None,
+            last_sync: None,
+        },
+    }
+}
+
+async fn account_signup(state: &Arc<State>, p: AccountSignupParams) -> RpcResult {
+    let device_name = p.device_name.unwrap_or_else(default_device_name);
+    let mut slot = state.vault.lock().await;
+    slot.last_activity = Instant::now();
+    let vault = match slot.vault.as_mut() {
+        Some(v) if v.is_unlocked() => v,
+        _ => return Err(err(rpc::VAULT_LOCKED, "vault is locked")),
+    };
+    let session = sync::signup(
+        &p.server,
+        &p.email,
+        &p.password,
+        vault,
+        &device_name,
+        p.invite_code.as_deref(),
+    )
+    .await
+    .map_err(sync_err)?;
+    to_value(status_from(Some(&session)))
+}
+
+/// Logs in on a device that has no local vault yet (or an empty one),
+/// replacing the vault file with one built from the server's material.
+/// Refuses if the local vault already has items.
+async fn account_login(state: &Arc<State>, p: AccountLoginParams) -> RpcResult {
+    let device_name = p.device_name.unwrap_or_else(default_device_name);
+    let path = state.opts.vault_path.clone();
+
+    let mut slot = state.vault.lock().await;
+    if path.exists() {
+        let existing = match slot.vault.take() {
+            Some(v) => Some(v),
+            None => match Vault::open(&path) {
+                Ok(v) => Some(v),
+                Err(VaultError::Missing(_)) => None,
+                Err(e) => return Err(vault_err(e)),
+            },
+        };
+        if let Some(v) = existing {
+            let has_items = !v.metas().map_err(vault_err)?.is_empty();
+            if has_items {
+                slot.vault = Some(v);
+                return Err(err(
+                    rpc::INVALID_PARAMS,
+                    "the local vault already has items; refusing to replace it with a new \
+                     login (back it up or move it aside first)",
+                ));
+            }
+            // Empty: safe to replace. Drop the connection before removing
+            // the file (an open handle blocks deletion on Windows).
+            drop(v);
+            std::fs::remove_file(&path).map_err(|e| {
+                err(
+                    rpc::INTERNAL_ERROR,
+                    format!("could not replace the vault file: {e}"),
+                )
+            })?;
+        }
+    }
+
+    let (vault, session) = sync::login(
+        &p.server,
+        &p.email,
+        &p.password,
+        &path,
+        &device_name,
+        p.totp.as_deref(),
+    )
+    .await
+    .map_err(sync_err)?;
+    slot.vault = Some(vault);
+    slot.last_activity = Instant::now();
+    drop(slot);
+    state.emit(event::VAULT_UNLOCKED, json!({}));
+    to_value(status_from(Some(&session)))
+}
+
+async fn account_logout(state: &Arc<State>) -> RpcResult {
+    let mut slot = state.vault.lock().await;
+    slot.last_activity = Instant::now();
+    let vault = match slot.vault.as_mut() {
+        Some(v) if v.is_unlocked() => v,
+        _ => return Err(err(rpc::VAULT_LOCKED, "vault is locked")),
+    };
+    let Some(session) = SyncSession::load(vault).map_err(sync_err)? else {
+        return Err(err(rpc::INVALID_PARAMS, "not signed in to a sync server"));
+    };
+    sync::logout(vault, &session).await.map_err(sync_err)?;
+    Ok(json!({}))
+}
+
+async fn account_status(state: &Arc<State>) -> RpcResult {
+    let mut slot = state.vault.lock().await;
+    let status = match slot.vault.as_mut() {
+        Some(v) if v.is_unlocked() => status_from(SyncSession::load(v).map_err(sync_err)?.as_ref()),
+        _ => status_from(None),
+    };
+    to_value(status)
+}
+
+/// Loads the current session, releasing the vault lock before returning
+/// (callers that only need to talk to the server, not the vault, do so
+/// without holding it across the network call).
+async fn current_session(state: &Arc<State>) -> std::result::Result<SyncSession, RpcError> {
+    let mut slot = state.vault.lock().await;
+    slot.last_activity = Instant::now();
+    let vault = match slot.vault.as_mut() {
+        Some(v) if v.is_unlocked() => v,
+        _ => return Err(err(rpc::VAULT_LOCKED, "vault is locked")),
+    };
+    match SyncSession::load(vault).map_err(sync_err)? {
+        Some(s) => Ok(s),
+        None => Err(err(rpc::INVALID_PARAMS, "not signed in to a sync server")),
+    }
+}
+
+async fn account_devices(state: &Arc<State>) -> RpcResult {
+    let session = current_session(state).await?;
+    let devices: Vec<DeviceInfo> = sync::devices(&session).await.map_err(sync_err)?;
+    to_value(devices)
+}
+
+async fn account_revoke_device(state: &Arc<State>, p: DeviceRef) -> RpcResult {
+    let session = current_session(state).await?;
+    sync::revoke_device(&session, &p.device_id)
+        .await
+        .map_err(sync_err)?;
+    Ok(json!({}))
+}
+
+async fn account_totp_setup(state: &Arc<State>) -> RpcResult {
+    let session = current_session(state).await?;
+    let resp: TotpSetupResponse = sync::totp_setup(&session).await.map_err(sync_err)?;
+    to_value(resp)
+}
+
+async fn account_totp_confirm(state: &Arc<State>, p: TotpCodeParams) -> RpcResult {
+    let session = current_session(state).await?;
+    sync::totp_confirm(&session, &p.code)
+        .await
+        .map_err(sync_err)?;
+    Ok(json!({}))
+}
+
+async fn account_totp_disable(state: &Arc<State>, p: TotpCodeParams) -> RpcResult {
+    let session = current_session(state).await?;
+    sync::totp_disable(&session, &p.code)
+        .await
+        .map_err(sync_err)?;
+    Ok(json!({}))
+}
+
+async fn sync_run(state: &Arc<State>, _p: SyncParams) -> RpcResult {
+    let mut slot = state.vault.lock().await;
+    slot.last_activity = Instant::now();
+    let vault = match slot.vault.as_mut() {
+        Some(v) if v.is_unlocked() => v,
+        _ => return Err(err(rpc::VAULT_LOCKED, "vault is locked")),
+    };
+    let mut session = SyncSession::load(vault)
+        .map_err(sync_err)?
+        .ok_or_else(|| err(rpc::INVALID_PARAMS, "not signed in to a sync server"))?;
+    let report = sync::sync(vault, &mut session).await.map_err(sync_err)?;
+    to_value(report_of(report))
+}
+
+/// Runs one sync if the vault is unlocked and signed in; called by the
+/// agent's background timer (`OURSHELL_AUTOSYNC_SECS`). Failures are
+/// logged, never propagated -- a flaky network must not crash the agent or
+/// touch the vault's lock state.
+pub async fn autosync_tick(state: &Arc<State>) {
+    let mut slot = state.vault.lock().await;
+    let vault = match slot.vault.as_mut() {
+        Some(v) if v.is_unlocked() => v,
+        _ => return,
+    };
+    let Ok(Some(mut session)) = SyncSession::load(vault) else {
+        return;
+    };
+    match sync::sync(vault, &mut session).await {
+        Ok(report) => {
+            if report.pushed > 0 || report.pulled > 0 || report.conflicts > 0 {
+                tracing::info!(?report, "autosync");
+            }
+        }
+        Err(e) => tracing::warn!("autosync failed: {e}"),
+    }
+}
+
+async fn vault_recover(state: &Arc<State>, p: VaultRecoverParams) -> RpcResult {
+    let path = state.opts.vault_path.clone();
+    let mut slot = state.vault.lock().await;
+    let mut vault = match slot.vault.take() {
+        Some(v) => v,
+        None => Vault::open(&path).map_err(|e| match e {
+            VaultError::Missing(_) => {
+                err(rpc::NOT_FOUND, "no vault yet; run `ourshell vault init`")
+            }
+            other => vault_err(other),
+        })?,
+    };
+    let res = tokio::task::block_in_place(|| vault.recover(&p.phrase, &p.new_password));
+    slot.vault = Some(vault);
+    res.map_err(vault_err)?;
+    slot.last_activity = Instant::now();
+    drop(slot);
+    state.emit(event::VAULT_UNLOCKED, json!({}));
+    Ok(json!({}))
+}

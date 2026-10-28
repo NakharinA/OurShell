@@ -45,6 +45,16 @@ pub mod method {
     pub const AI_AUDIT: &str = "ai.audit";
     pub const EVENTS_SUBSCRIBE: &str = "events.subscribe";
     pub const SYNC_RUN: &str = "sync.run";
+    pub const VAULT_RECOVER: &str = "vault.recover";
+    pub const ACCOUNT_SIGNUP: &str = "account.signup";
+    pub const ACCOUNT_LOGIN: &str = "account.login";
+    pub const ACCOUNT_LOGOUT: &str = "account.logout";
+    pub const ACCOUNT_STATUS: &str = "account.status";
+    pub const ACCOUNT_DEVICES: &str = "account.devices";
+    pub const ACCOUNT_REVOKE_DEVICE: &str = "account.revoke_device";
+    pub const ACCOUNT_TOTP_SETUP: &str = "account.totp_setup";
+    pub const ACCOUNT_TOTP_CONFIRM: &str = "account.totp_confirm";
+    pub const ACCOUNT_TOTP_DISABLE: &str = "account.totp_disable";
     pub const SHUTDOWN: &str = "agent.shutdown";
 }
 
@@ -373,4 +383,68 @@ pub struct AuditQuery {
 pub struct SyncParams {
     #[serde(default)]
     pub server: Option<String>,
+}
+
+/// Outcome of one `sync.run` call. Mirrors `ourshell_core::sync::SyncReport`
+/// (this crate does not depend on `ourshell-core`, so the agent copies the
+/// fields across).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncReport {
+    pub pushed: usize,
+    pub pulled: usize,
+    pub conflicts: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AccountSignupParams {
+    pub server: String,
+    pub email: String,
+    pub password: String,
+    #[serde(default)]
+    pub invite_code: Option<String>,
+    /// Defaults to this host's name.
+    #[serde(default)]
+    pub device_name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AccountLoginParams {
+    pub server: String,
+    pub email: String,
+    pub password: String,
+    #[serde(default)]
+    pub totp: Option<String>,
+    /// Defaults to this host's name.
+    #[serde(default)]
+    pub device_name: Option<String>,
+}
+
+/// `account.status` result.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountStatus {
+    pub signed_in: bool,
+    #[serde(default)]
+    pub server: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub device_id: Option<String>,
+    #[serde(default)]
+    pub last_sync: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceRef {
+    pub device_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TotpCodeParams {
+    pub code: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultRecoverParams {
+    pub phrase: String,
+    pub new_password: String,
 }
