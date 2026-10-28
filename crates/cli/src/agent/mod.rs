@@ -3,7 +3,9 @@
 //! All front-ends (CLI, desktop, MCP) go through this process, so keys are unlocked
 //! in one place and every AI call passes the policy check.
 
+mod ai;
 mod items;
+pub mod policy;
 pub mod ssh_ops;
 
 use std::path::PathBuf;
@@ -50,6 +52,7 @@ pub struct State {
     pub events: broadcast::Sender<Notification>,
     pub clients: std::sync::atomic::AtomicUsize,
     pub last_disconnect: Mutex<Instant>,
+    pub policy: std::sync::Mutex<policy::Policy>,
     pub ssh: ssh_ops::SshState,
     pub shutdown: tokio::sync::Notify,
 }
@@ -104,6 +107,7 @@ impl State {
             events,
             clients: Default::default(),
             last_disconnect: Mutex::new(Instant::now()),
+            policy: Default::default(),
             ssh: Default::default(),
             shutdown: Default::default(),
         })
@@ -320,6 +324,14 @@ async fn handle_conn(state: Arc<State>, stream: Stream) -> Result<()> {
         })?,
     ));
 
+    if let Some(s) = &hello.ai_session {
+        state
+            .policy
+            .lock()
+            .unwrap()
+            .register_session(s, hello.ai_client_name.clone());
+        state.emit(event::AI_MODE, json!({"ai_session": s, "connected": true}));
+    }
     let (ntx, mut nrx) = mpsc::unbounded_channel::<Notification>();
     let conn = Arc::new(Conn {
         kind: hello.client,
@@ -397,6 +409,11 @@ async fn handle_conn(state: Arc<State>, stream: Stream) -> Result<()> {
 
 /// Hook for cleaning up per-connection resources.
 async fn connection_closed(state: &Arc<State>, conn: &Arc<Conn>) {
+    if let Some(s) = &conn.ai_session {
+        // The AI session ends with its connection; so does any dangerous mode.
+        state.policy.lock().unwrap().end_session(s);
+        state.emit(event::AI_MODE, json!({"ai_session": s, "connected": false}));
+    }
     ssh_ops::connection_closed(state, conn).await;
 }
 
@@ -407,11 +424,11 @@ pub async fn dispatch(
     method: &str,
     params: Value,
 ) -> RpcResult {
-    // AI clients may only call AI methods.
-    if conn.kind == ClientKind::Mcp && !method.starts_with("ai.") {
+    // AI clients may only call the AI tool methods.
+    if conn.kind == ClientKind::Mcp && !ai::AI_CALLABLE.contains(&method) {
         return Err(err(
             rpc::POLICY_DENIED,
-            "MCP clients may only call ai.* methods",
+            "MCP clients may only call AI tool methods",
         ));
     }
     match method {
@@ -426,6 +443,7 @@ pub async fn dispatch(
             state.shutdown.notify_one();
             Ok(json!({}))
         }
+        m if m.starts_with("ai.") => ai::dispatch(state, conn, m, params).await,
         m if m.starts_with("pty.")
             || m.starts_with("sftp.")
             || m.starts_with("forward.")

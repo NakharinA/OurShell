@@ -1,5 +1,6 @@
 //! `ourshell` command-line interface.
 
+mod ai;
 mod items;
 mod ssh;
 
@@ -44,6 +45,9 @@ pub enum Command {
     /// Manage snippets.
     #[command(subcommand)]
     Snippet(items::SnippetCmd),
+    /// Approve AI requests, dangerous mode, kill switch and audit log.
+    #[command(subcommand)]
+    Ai(ai::AiCmd),
     /// Open an interactive shell on a saved host.
     Connect {
         host: String,
@@ -167,6 +171,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Host(cmd) => items::host(cmd, cli.json).await,
         Command::Identity(cmd) => items::identity(cmd, cli.json).await,
         Command::Snippet(cmd) => items::snippet(cmd, cli.json).await,
+        Command::Ai(cmd) => ai::run(cmd, cli.json).await,
         Command::Connect {
             host,
             agent_forwarding,
