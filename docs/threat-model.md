@@ -30,6 +30,12 @@ One page. Revisit before every release.
 - Compromised OS or hardware, malicious extensions in the desktop webview, side channels.
 - Recovering a forgotten master password without a recovery key. The data is lost by design.
 
+## Accepted dependency risks
+
+| Advisory | Why it is accepted |
+| --- | --- |
+| RUSTSEC-2023-0071 (`rsa` Marvin timing attack) | RSA is used only on the client to generate keys and sign SSH auth challenges. There is no RSA decryption and no remote timing oracle. Ed25519 is the default. Re-check when a fixed `rsa` release ships. |
+
 ## Design rules
 
 1. The server never holds a key that decrypts user data.

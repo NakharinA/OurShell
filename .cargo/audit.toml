@@ -1,0 +1,10 @@
+# cargo-audit configuration. Every ignore needs a justification and a review date.
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 (rsa, "Marvin" timing side channel). No fixed release exists.
+    # OurShell only uses RSA client-side to generate keys and sign SSH user-auth
+    # challenges on the user's own machine; it never performs RSA decryption and
+    # exposes no remotely timeable RSA oracle. Ed25519 is the default key type.
+    # Review again when `rsa` ships a constant-time fix (checked 2026-10-29).
+    "RUSTSEC-2023-0071",
+]
