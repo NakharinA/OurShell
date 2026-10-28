@@ -66,6 +66,88 @@ only **identifies** the user; the master password still unlocks the vault
 over OPAQUE afterward, same as a normal login. If unset, both routes answer
 `501 Not Implemented`.
 
+## Connecting clients
+
+The `ourshell` CLI (and anything built on `ourshell_core::sync`) talks to
+this server over the API below. The local agent holds the session; the CLI
+is a thin wrapper around it (`ourshell agent` starts on demand, same as for
+every other command).
+
+```sh
+# First device: create a local vault, add some hosts, then sign up --
+# this uploads that vault's *existing* key material, nothing is regenerated.
+ourshell vault init
+ourshell host add prod-web root@203.0.113.10
+ourshell account signup --server https://ourshell.example.com --email me@example.com
+ourshell sync
+
+# A second device: no local vault yet (or an empty one). Logging in builds
+# one from the server's material and decrypts everything already pushed.
+ourshell account login --server https://ourshell.example.com --email me@example.com
+ourshell sync
+
+# Afterwards, on either device:
+ourshell account status
+ourshell account devices
+ourshell account revoke <device-id>
+ourshell account logout
+```
+
+`ourshell account login` refuses to run over a local vault that already has
+items (it would otherwise discard them) -- move that file aside first if
+you really mean to replace it. `--server` also reads `$OURSHELL_SERVER`, and
+master passwords honor `$OURSHELL_PASSWORD` like every other prompt (see
+`docs/agent-protocol.md`).
+
+Two-factor authentication: `ourshell account totp setup` prints an
+`otpauth://` URL and a manual-entry secret; scan or type it into an
+authenticator app, then `ourshell account totp confirm <code>` turns it on
+(`totp disable <code>` turns it back off). Once enabled, `account login`
+needs `--totp <code>` too.
+
+**Auto-sync**: while a vault is unlocked and signed in, the agent
+periodically runs the same push/pull `ourshell sync` does, every
+`$OURSHELL_AUTOSYNC_SECS` seconds (default 300; `0` disables it).
+
+**Conflicts**: pushing is optimistic-concurrency (`version = current + 1`
+or the push is rejected). On a conflict the server's copy always wins for
+that item id, but the local edit is never silently dropped -- it is kept as
+a new item (renamed "<name> (conflict copy)" when the item has a `name`
+field) so you can merge by hand. Deleting an item pushes a tombstone, which
+every other device applies the same way.
+
+**What's persisted where**: the session token, this device's id and its
+Ed25519 identity, and the pull cursor live *inside* the vault's own SQLite
+file, encrypted with the vault key (`Vault::set_secret_meta`/
+`get_secret_meta`, AEAD-sealed, base64 in the `meta` table) -- never in
+plain text, and never synced to the server. This is a deliberate deviation
+from the project plan's suggestion of the OS keychain: it keeps the client
+free of a keychain dependency while still encrypting the token at rest, at
+the cost of tying that session to this one vault file (copying the vault
+file to another machine also copies its session -- revoke the device if
+that's not what you want).
+
+### Recovering a vault that is signed in to a server
+
+`ourshell vault recover` resets the master password from the 24-word
+recovery phrase (`Vault::recover`). Locally this regenerates the vault's
+account signing/encryption keypair and re-signs every item with it -- by
+design, so a lost password never requires trusting the old one.
+
+If that vault is signed in to a sync server, this is currently a known
+gap: the server (and every other device) still has the **old** account
+keys on file (`enc_public`/`sign_public`/`wrapped_account_keys`/`kdf` in
+the `account_keys` table), and there is no `/v1/...` endpoint to update
+them after the fact -- registration only writes that row once, at signup.
+After a recovery, other devices' `apply_remote` checks will fail to verify
+the signature on anything *this* device pushes afterward (and this device
+will fail to verify items signed before the recovery), because the
+verifying key changed out from under the account. The CLI prints a loud
+warning when this happens. Until a `change_password`/`rotate_keys`
+endpoint exists, the practical workaround is: sign out everywhere
+(`ourshell account logout` on each device), then `ourshell account signup`
+again as if setting up sync for the first time.
+
 ## Scaling to a team
 
 - **Invite-only**: set `INVITE_ONLY=true`. An owner/admin creates codes with

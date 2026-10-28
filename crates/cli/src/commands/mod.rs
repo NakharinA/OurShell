@@ -1,9 +1,11 @@
 //! `ourshell` command-line interface.
 
+mod account;
 mod ai;
 mod items;
 mod ssh;
 
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
@@ -12,7 +14,8 @@ use ourshell::agent::{self, AgentOptions};
 use ourshell::client::{hello, AgentClient};
 use ourshell_core::vault::Vault;
 use ourshell_proto::agent::{
-    method, ClientKind, UnlockParams, VaultInitParams, VaultInitResult, VaultStatus,
+    method, AccountStatus, ClientKind, SyncParams, SyncReport, UnlockParams, VaultInitParams,
+    VaultInitResult, VaultRecoverParams, VaultStatus,
 };
 use ourshell_proto::rpc;
 use serde_json::json;
@@ -48,6 +51,11 @@ pub enum Command {
     /// Approve AI requests, dangerous mode, kill switch and audit log.
     #[command(subcommand)]
     Ai(ai::AiCmd),
+    /// Sign up, sign in on a new device, and manage the synced account.
+    #[command(subcommand)]
+    Account(account::AccountCmd),
+    /// Push local changes and pull remote ones from the sync server.
+    Sync,
     /// Open an interactive shell on a saved host.
     Connect {
         host: String,
@@ -106,6 +114,8 @@ pub enum VaultCmd {
     Status,
     /// Stop the agent (locks the vault).
     StopAgent,
+    /// Reset the master password using the recovery phrase shown at `vault init`.
+    Recover,
 }
 
 /// Reads a secret from `$OURSHELL_PASSWORD` (for scripts and tests) or the terminal.
@@ -172,6 +182,23 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Identity(cmd) => items::identity(cmd, cli.json).await,
         Command::Snippet(cmd) => items::snippet(cmd, cli.json).await,
         Command::Ai(cmd) => ai::run(cmd, cli.json).await,
+        Command::Account(cmd) => account::run(cmd, cli.json).await,
+        Command::Sync => {
+            let c = connect_unlocked().await?;
+            let report: SyncReport = c
+                .call(method::SYNC_RUN, &SyncParams { server: None })
+                .await
+                .map_err(friendly)?;
+            if cli.json {
+                println!("{}", serde_json::to_string(&report)?);
+            } else {
+                println!(
+                    "pushed {} / pulled {} / conflicts {}",
+                    report.pushed, report.pulled, report.conflicts
+                );
+            }
+            Ok(())
+        }
         Command::Connect {
             host,
             agent_forwarding,
@@ -264,6 +291,57 @@ async fn vault_cmd(cmd: VaultCmd, json_out: bool) -> Result<()> {
             }
             Err(_) => println!("Agent is not running."),
         },
+        VaultCmd::Recover => {
+            let c = connect().await?;
+            let phrase = if let Ok(p) = std::env::var("OURSHELL_RECOVERY_PHRASE") {
+                p
+            } else {
+                print!("Recovery phrase (24 words): ");
+                std::io::stdout().flush().ok();
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                line.trim().to_string()
+            };
+            let new_password = read_secret("New master password: ")?;
+            if std::env::var("OURSHELL_PASSWORD").is_err() {
+                let again = read_secret("Repeat new master password: ")?;
+                if again != new_password {
+                    bail!("passwords do not match");
+                }
+            }
+            c.call::<_, serde_json::Value>(
+                method::VAULT_RECOVER,
+                &VaultRecoverParams {
+                    phrase,
+                    new_password,
+                },
+            )
+            .await
+            .map_err(friendly)?;
+            println!("Vault recovered; master password changed.");
+
+            if let Ok(status) = c
+                .call::<_, AccountStatus>(method::ACCOUNT_STATUS, &json!({}))
+                .await
+            {
+                if status.signed_in {
+                    eprintln!();
+                    eprintln!(
+                        "WARNING: this vault is signed in to {} as {}.",
+                        status.server.unwrap_or_default(),
+                        status.email.unwrap_or_default()
+                    );
+                    eprintln!(
+                        "Recovering regenerated your account's signing/encryption keys locally, \
+                         but the sync server (and any other signed-in device) still has the OLD \
+                         keys on file -- there is currently no server endpoint to update them. \
+                         Sync may fail to verify items from other devices until you sign out and \
+                         set up a fresh account. See docs/self-hosting.md, \"Recovering a vault \
+                         that is signed in to a server\"."
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }
