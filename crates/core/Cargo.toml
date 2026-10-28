@@ -11,5 +11,18 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+argon2 = "0.6.0"
+base64 = "0.23.1"
+bip39 = "3.0.0"
+chacha20poly1305 = "0.11.0"
+ed25519-dalek = "3.0.0"
+getrandom = "0.4.3"
+hkdf = "0.13.0"
 ourshell-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11.0"
 thiserror.workspace = true
+uuid = { version = "1.26.1", features = ["v4", "serde"] }
+x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
+zeroize = { version = "1.9.1", features = ["derive"] }
