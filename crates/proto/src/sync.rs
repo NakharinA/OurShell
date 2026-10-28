@@ -181,3 +181,87 @@ pub struct ApiError {
     pub error: String,
     pub message: String,
 }
+
+// ----- devices -----
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeviceListResponse {
+    pub devices: Vec<DeviceInfo>,
+}
+
+// ----- org / team administration -----
+
+/// Role of a user within an org.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OrgRole {
+    Owner,
+    Admin,
+    Member,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateInviteRequest {
+    #[serde(default)]
+    pub role: Option<OrgRole>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateInviteResponse {
+    pub code: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OrgUserInfo {
+    pub user_id: String,
+    pub email: String,
+    pub role: OrgRole,
+    pub disabled: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OrgUsersResponse {
+    pub users: Vec<OrgUserInfo>,
+}
+
+// ----- team vaults -----
+
+/// One member's sealed copy of a (team) vault key, uploaded by the client
+/// that created or is extending the share. The server never sees the vault
+/// key itself, only this per-recipient sealed box.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VaultMemberSeal {
+    pub user_id: String,
+    #[serde(with = "crate::b64")]
+    pub sealed_vault_key: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateVaultRequest {
+    pub vault_id: String,
+    pub key_id: String,
+    pub name: String,
+    pub members: Vec<VaultMemberSeal>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AddVaultMemberRequest {
+    pub user_id: String,
+    pub key_id: String,
+    #[serde(with = "crate::b64")]
+    pub sealed_vault_key: Vec<u8>,
+}
+
+/// Public halves of an account's key pair, looked up by email so a client
+/// can seal a team vault key to a new teammate.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublicKeysResponse {
+    pub user_id: String,
+    pub enc_public: String,
+    pub sign_public: String,
+}
+
+/// Generic acknowledgement carrying the id of whatever was just created.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IdResponse {
+    pub id: String,
+}
