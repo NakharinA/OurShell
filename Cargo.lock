@@ -1409,6 +1409,7 @@ dependencies = [
  "ourshell-core",
  "ourshell-proto",
  "predicates",
+ "regex",
  "rpassword",
  "serde",
  "serde_json",
