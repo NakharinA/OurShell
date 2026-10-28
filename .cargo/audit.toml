@@ -7,4 +7,11 @@ ignore = [
     # exposes no remotely timeable RSA oracle. Ed25519 is the default key type.
     # Review again when `rsa` ships a constant-time fix (checked 2026-10-29).
     "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0387 (crypto-bigint 0.5 timing variability). Pulled in only via
+    # elliptic-curve 0.13 as a mandatory dependency of opaque-ke 4.0 (our OPAQUE suite
+    # is ristretto255, computed by curve25519-dalek, so no secret P-curve math runs)
+    # and via openidconnect's p256/p384 for verifying public ID-token signatures.
+    # Upgrade when opaque-ke and openidconnect release on elliptic-curve >= 0.14
+    # (checked 2026-10-29).
+    "RUSTSEC-2026-0387",
 ]

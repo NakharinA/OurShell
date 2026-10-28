@@ -35,6 +35,7 @@ One page. Revisit before every release.
 | Advisory | Why it is accepted |
 | --- | --- |
 | RUSTSEC-2023-0071 (`rsa` Marvin timing attack) | RSA is used only on the client to generate keys and sign SSH auth challenges. There is no RSA decryption and no remote timing oracle. Ed25519 is the default. Re-check when a fixed `rsa` release ships. |
+| RUSTSEC-2026-0387 (`crypto-bigint` 0.5 timing) | Only reachable through `elliptic-curve` 0.13, a mandatory dependency of `opaque-ke` 4.0 (our suite is ristretto255 on `curve25519-dalek`), and through `openidconnect`, which verifies public ID-token signatures. No secret-dependent P-curve arithmetic runs. Upgrade when both move to `elliptic-curve` 0.14 or later. |
 
 ## Design rules
 
