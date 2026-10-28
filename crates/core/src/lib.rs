@@ -5,6 +5,7 @@
 
 pub mod crypto;
 pub mod import;
+pub mod keygen;
 pub mod ssh;
 pub mod sync;
 pub mod vault;

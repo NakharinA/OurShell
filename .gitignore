@@ -7,3 +7,4 @@ dist/
 *.sqlite
 .DS_Store
 apps/desktop/src-tauri/binaries/
+.claude/

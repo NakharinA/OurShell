@@ -16,12 +16,16 @@ The caller supplies the AEAD associated data (AAD); it is **not** stored in the 
 
 ## Sealed box (vault key sealed to an account public key)
 
-A `crypto_box` sealed box (X25519 + XSalsa20-Poly1305), prefixed with a version byte:
+An anonymous-sender box built like HPKE base mode, from audited primitives only:
+
+1. Generate an ephemeral X25519 key pair; compute `shared = X25519(eph_sk, recipient_pk)` and reject a non-contributory (all-zero) result.
+2. `key = HKDF-SHA256(salt = eph_pk ‖ recipient_pk, ikm = shared, info = "ourshell:seal:v1")`, 32 bytes.
+3. Encrypt with the ciphertext container above, AAD = `eph_pk`.
 
 ```
 0   1     version = 0x01
 1   32    ephemeral X25519 public key
-33  n+16  ciphertext
+33  …     ciphertext container (version, alg, nonce, ciphertext+tag)
 ```
 
 ## Item envelope
