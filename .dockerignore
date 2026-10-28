@@ -1,0 +1,11 @@
+target/
+**/target/
+.git/
+.github/
+.claude/
+apps/
+node_modules/
+dist/
+*.db
+*.sqlite
+.env
