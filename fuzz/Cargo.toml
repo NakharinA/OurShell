@@ -1,0 +1,59 @@
+[package]
+name = "ourshell-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ourshell-core = { path = "../crates/core" }
+ourshell-proto = { path = "../crates/proto" }
+serde_json = "1"
+
+# Not part of the main workspace: fuzzing needs nightly (`cargo +nightly fuzz run <target>`).
+[workspace]
+
+[[bin]]
+name = "aead_decrypt"
+path = "fuzz_targets/aead_decrypt.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "seal_open"
+path = "fuzz_targets/seal_open.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "envelope_json"
+path = "fuzz_targets/envelope_json.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "agent_rpc"
+path = "fuzz_targets/agent_rpc.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "sync_messages"
+path = "fuzz_targets/sync_messages.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "ssh_config"
+path = "fuzz_targets/ssh_config.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "termius_csv"
+path = "fuzz_targets/termius_csv.rs"
+test = false
+doc = false
