@@ -54,10 +54,63 @@
   function doClose(): void {
     closePane(tabId, node.id);
   }
+
+  function onLeafKeydown(e: KeyboardEvent): void {
+    // Mirrors the click handler below: Enter/Space "activates" the pane,
+    // same as clicking it. The pane itself can't be a <button> because it
+    // contains other interactive content (the header buttons and the
+    // terminal session), so it's marked up as role="button" + tabindex
+    // instead, with the matching keyboard handler a11y expects.
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setActivePane(tabId, node.id);
+    }
+  }
+
+  function nudgeDivider(i: number, delta: number): void {
+    if (node.type !== "split") return;
+    const sizes = [...node.sizes];
+    const before = sizes.slice(0, i).reduce((a, b) => a + b, 0);
+    const pairTotal = sizes[i] + sizes[i + 1];
+    const newBefore = Math.min(before + pairTotal - 0.05, Math.max(before + 0.05, before + sizes[i] + delta));
+    sizes[i] = newBefore - before;
+    sizes[i + 1] = pairTotal - sizes[i];
+    node.sizes = sizes;
+    node = node; // trigger reactivity
+  }
+
+  function onDividerKeydown(i: number, e: KeyboardEvent): void {
+    if (node.type !== "split") return;
+    const isRow = node.orientation === "row";
+    const step = 0.02;
+    const decreaseKey = isRow ? "ArrowLeft" : "ArrowUp";
+    const increaseKey = isRow ? "ArrowRight" : "ArrowDown";
+    if (e.key === decreaseKey) {
+      e.preventDefault();
+      nudgeDivider(i, -step);
+    } else if (e.key === increaseKey) {
+      e.preventDefault();
+      nudgeDivider(i, step);
+    }
+  }
+
+  // Value (0-100) the divider at index `i` currently represents, for the
+  // `slider` role below.
+  function dividerValue(i: number): number {
+    if (node.type !== "split") return 50;
+    return Math.round(node.sizes.slice(0, i + 1).reduce((a, b) => a + b, 0) * 100);
+  }
 </script>
 
 {#if node.type === "leaf"}
-  <div class="leaf" class:active={node.id === activePaneId} on:click={() => setActivePane(tabId, node.id)}>
+  <div
+    class="leaf"
+    class:active={node.id === activePaneId}
+    role="button"
+    tabindex="0"
+    on:click={() => setActivePane(tabId, node.id)}
+    on:keydown={onLeafKeydown}
+  >
     <div class="leaf-header">
       <span class="host-name">{node.hostName}</span>
       <span class="spacer"></span>
@@ -85,7 +138,15 @@
           class="divider"
           class:row={node.orientation === "row"}
           class:col={node.orientation === "col"}
+          role="slider"
+          aria-label="Resize panes"
+          aria-orientation={node.orientation === "row" ? "horizontal" : "vertical"}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={dividerValue(i)}
+          tabindex="0"
           on:mousedown={(e) => onDividerDown(i, e)}
+          on:keydown={(e) => onDividerKeydown(i, e)}
         ></div>
       {/if}
     {/each}

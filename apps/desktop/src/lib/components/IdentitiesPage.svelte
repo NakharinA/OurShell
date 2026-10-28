@@ -55,10 +55,12 @@
   }
 </script>
 
+<svelte:window on:keydown={(e) => $showIdentities && e.key === "Escape" && close()} />
+
 {#if $showIdentities}
-  <div class="modal-backdrop" on:click={close}>
-    <div class="modal wide" on:click|stopPropagation>
-      <h2>Identities</h2>
+  <div class="modal-backdrop" role="presentation" on:click|self={close}>
+    <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="identities-title">
+      <h2 id="identities-title">Identities</h2>
       <div class="layout">
         <table>
           <thead>

@@ -123,10 +123,18 @@
   });
 </script>
 
+<svelte:window on:keydown={(e) => host && e.key === "Escape" && close()} />
+
 {#if host}
-  <div class="modal-backdrop" on:click={close}>
-    <div class="modal wide" class:drag-over={dragOver} on:click|stopPropagation>
-      <h2>SFTP — {host.item.name}</h2>
+  <div class="modal-backdrop" role="presentation" on:click|self={close}>
+    <div
+      class="modal wide"
+      class:drag-over={dragOver}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="sftp-title"
+    >
+      <h2 id="sftp-title">SFTP — {host.item.name}</h2>
       <div class="row path-row">
         <button class="ghost" on:click={up} disabled={path === "."}>↑ Up</button>
         <code class="path">{path}</code>

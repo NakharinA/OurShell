@@ -53,10 +53,17 @@
   }
 </script>
 
+<svelte:window on:keydown={(e) => sessionId && e.key === "Escape" && cancel()} />
+
 {#if sessionId}
-  <div class="modal-backdrop" on:click={cancel}>
-    <div class="modal danger-modal" on:click|stopPropagation>
-      <h2 class="danger-title">⚠ Turn on dangerous mode</h2>
+  <div class="modal-backdrop" role="presentation" on:click|self={cancel}>
+    <div
+      class="modal danger-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="dangerous-mode-title"
+    >
+      <h2 class="danger-title" id="dangerous-mode-title">⚠ Turn on dangerous mode</h2>
       <p>
         While dangerous mode is on, this AI session can run commands and read/write files on the
         hosts you pick below <strong>without asking you first</strong>. A red banner will stay on
