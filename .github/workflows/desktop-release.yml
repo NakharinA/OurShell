@@ -1,0 +1,119 @@
+name: Desktop release
+
+# Signed installers + updater manifest for tagged releases.
+#
+# Required repository secrets (see docs/release-signing.md):
+#   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   updater signatures (all OSes)
+#   WINDOWS_CERTIFICATE (base64 .pfx), WINDOWS_CERTIFICATE_PASSWORD Authenticode
+#   APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD,
+#   APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID  codesign + notarization
+# Missing Windows/Apple secrets produce unsigned (but updater-signed) bundles.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  bundle:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+          - platform: ubuntu-22.04
+            args: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Build the agent sidecar
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            cargo build --release -p ourshell --target aarch64-apple-darwin
+            cargo build --release -p ourshell --target x86_64-apple-darwin
+            mkdir -p apps/desktop/src-tauri/binaries
+            lipo -create -output apps/desktop/src-tauri/binaries/ourshell-universal-apple-darwin \
+              target/aarch64-apple-darwin/release/ourshell target/x86_64-apple-darwin/release/ourshell
+            cp target/aarch64-apple-darwin/release/ourshell apps/desktop/src-tauri/binaries/ourshell-aarch64-apple-darwin
+            cp target/x86_64-apple-darwin/release/ourshell apps/desktop/src-tauri/binaries/ourshell-x86_64-apple-darwin
+          else
+            cargo build --release -p ourshell
+            node apps/desktop/scripts/copy-sidecar.mjs --release
+          fi
+
+      - name: Import Windows code-signing certificate
+        if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: pwsh
+        run: |
+          $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          [IO.File]::WriteAllBytes("cert.pfx", $bytes)
+          $pw = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath cert.pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+          Remove-Item cert.pfx
+          $conf = Get-Content apps/desktop/src-tauri/tauri.conf.json | ConvertFrom-Json
+          $conf.bundle | Add-Member -NotePropertyName windows -NotePropertyValue @{
+            certificateThumbprint = $cert.Thumbprint; digestAlgorithm = "sha256";
+            timestampUrl = "http://timestamp.digicert.com" } -Force
+          $conf | ConvertTo-Json -Depth 20 | Set-Content apps/desktop/src-tauri/tauri.conf.json
+
+      - name: npm ci
+        working-directory: apps/desktop
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: OurShell ${{ github.ref_name }}
+          releaseDraft: true
+          includeUpdaterJson: true
+          args: ${{ matrix.args }} --features updater --config src-tauri/tauri.updater.conf.json
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.exe
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.msi
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.deb
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.AppImage
