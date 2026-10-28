@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use common::{as_session, new_device, register_user, request, setup};
 use ourshell_proto::sync::{
     AddVaultMemberRequest, CreateVaultRequest, IdResponse, PublicKeysResponse, PullResponse,
-    PushRequest, SyncItem, VaultMemberSeal,
+    PushRequest, SyncItem, VaultMemberSeal, VaultMembersResponse,
 };
 use uuid::Uuid;
 
@@ -127,6 +127,35 @@ async fn team_vault_create_share_and_pull_by_member() {
         &app.router,
         "GET",
         &pull_url,
+        Some(&outsider.session_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Any member can list the vault's current members (needed to accept
+    // their item signatures, and to reseal a rotated key to each of
+    // them).
+    let members_url = format!("/v1/vaults/{vault_id}/members");
+    let (status, body) = request::<()>(
+        &app.router,
+        "GET",
+        &members_url,
+        Some(&b.session_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    let members: VaultMembersResponse = serde_json::from_value(body).unwrap();
+    let mut emails: Vec<&str> = members.members.iter().map(|m| m.email.as_str()).collect();
+    emails.sort_unstable();
+    assert_eq!(emails, vec!["member@example.com", "owner@example.com"]);
+
+    // A non-member is refused.
+    let (status, _) = request::<()>(
+        &app.router,
+        "GET",
+        &members_url,
         Some(&outsider.session_token),
         None,
     )

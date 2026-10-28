@@ -28,10 +28,12 @@
   $: if ($showAuditLog) void load();
 </script>
 
+<svelte:window on:keydown={(e) => $showAuditLog && e.key === "Escape" && close()} />
+
 {#if $showAuditLog}
-  <div class="modal-backdrop" on:click={close}>
-    <div class="modal wide" on:click|stopPropagation>
-      <h2>AI audit log</h2>
+  <div class="modal-backdrop" role="presentation" on:click|self={close}>
+    <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="audit-log-title">
+      <h2 id="audit-log-title">AI audit log</h2>
       {#if error}<p class="error">{error}</p>{/if}
       {#if loading}
         <p class="text-dim">Loading…</p>

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/core", "crates/proto", "crates/cli", "crates/mcp", "server"]
-exclude = ["apps/desktop/src-tauri"]
+exclude = ["apps/desktop/src-tauri", "fuzz"]
 
 [workspace.package]
 version = "0.0.1"

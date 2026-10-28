@@ -44,6 +44,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 
 [dev-dependencies]
+proptest = "1.11.0"
 rand = "0.10"
 tempfile = "3.27.0"
 # Sync end-to-end test only (`tests/sync_e2e.rs`): boots the real sync

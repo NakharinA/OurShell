@@ -4,6 +4,7 @@
   import { startAiWatcher } from "../stores/ai";
   import Sidebar from "./Sidebar.svelte";
   import TopBanner from "./TopBanner.svelte";
+  import UpdateBanner from "./UpdateBanner.svelte";
   import TerminalWorkspace from "./terminal/TerminalWorkspace.svelte";
   import HostEditor from "./HostEditor.svelte";
   import IdentitiesPage from "./IdentitiesPage.svelte";
@@ -15,6 +16,7 @@
   import AiPanel from "./AiPanel.svelte";
   import DangerousModeDialog from "./DangerousModeDialog.svelte";
   import AuditLogViewer from "./AuditLogViewer.svelte";
+  import TeamsPage from "./TeamsPage.svelte";
 
   onMount(() => {
     startAiWatcher();
@@ -24,6 +26,7 @@
 
 <div class="layout">
   <TopBanner />
+  <UpdateBanner />
   <div class="body">
     <Sidebar />
     <main class="content">
@@ -42,6 +45,7 @@
 <AiPanel />
 <DangerousModeDialog />
 <AuditLogViewer />
+<TeamsPage />
 
 <style>
   .layout {

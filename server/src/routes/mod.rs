@@ -1,3 +1,4 @@
+pub mod account;
 pub mod admin;
 pub mod devices;
 pub mod health;
@@ -44,6 +45,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/totp/setup", post(totp::setup))
         .route("/totp/confirm", post(totp::confirm))
         .route("/totp/disable", post(totp::disable))
+        .route("/account/vaults", get(account::vaults))
+        .route("/account/password/start", post(account::start))
+        .route("/account/password/finish", post(account::finish))
         .route(
             "/vaults/{vault_id}/items",
             get(items::pull).post(items::push),
@@ -52,7 +56,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/orgs/users", get(admin::list_users))
         .route("/orgs/users/{user_id}/disable", post(admin::disable_user))
         .route("/vaults", post(vaults::create))
-        .route("/vaults/{vault_id}/members", post(vaults::add_member))
+        .route(
+            "/vaults/{vault_id}/members",
+            get(vaults::list_members).post(vaults::add_member),
+        )
         .route(
             "/vaults/{vault_id}/members/{user_id}",
             delete(vaults::remove_member),

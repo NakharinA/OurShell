@@ -165,3 +165,25 @@ pub async fn is_vault_member(pool: &PgPool, vault_id: Uuid, user_id: Uuid) -> sq
             .await?;
     Ok(row.is_some())
 }
+
+/// Every vault (personal and team) `user_id` currently belongs to, as
+/// `(vault_id, kind, name, key_id, sealed_vault_key, recovery_wrap)`.
+/// Used both by `login::finish` (building the initial `SessionResponse`)
+/// and `account::vaults` (letting an already-signed-in session refresh
+/// its list, e.g. after being added to a team vault).
+pub type VaultRow = (String, String, String, String, Vec<u8>, Option<Vec<u8>>);
+
+pub async fn user_vaults(pool: &PgPool, user_id: Uuid) -> sqlx::Result<Vec<VaultRow>> {
+    sqlx::query_as(
+        r#"
+        SELECT v.id::text, v.kind, v.name, vm.key_id, vm.sealed_vault_key, vm.recovery_wrap
+        FROM vault_members vm
+        JOIN vaults v ON v.id = vm.vault_id
+        WHERE vm.user_id = $1
+        ORDER BY v.kind DESC, v.name
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+}

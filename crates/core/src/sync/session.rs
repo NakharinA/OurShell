@@ -7,6 +7,8 @@
 //! the project plan's "OS keychain" suggestion: it keeps the client
 //! dependency-free while still encrypting the token at rest).
 
+use std::collections::HashMap;
+
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +19,8 @@ use super::error::Result;
 const META_KEY: &str = "sync_session";
 
 /// Everything needed to talk to a sync server as one already-registered
-/// device, plus the pull cursor so `sync()` can resume incrementally.
+/// device, plus a pull cursor *per vault* (personal and every team vault
+/// this account belongs to) so `sync()` can resume each one incrementally.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SyncSession {
     pub server_url: String,
@@ -25,10 +28,24 @@ pub struct SyncSession {
     pub device_id: String,
     pub device_secret: [u8; 32],
     pub session_token: String,
+    /// `vault_id -> cursor`. Replaces the single flat `cursor` field a
+    /// personal-vault-only session used to have; an old session missing
+    /// this (or with an unrecognized vault id) simply resumes that vault
+    /// from the start, which is safe (pull/apply is idempotent).
     #[serde(default)]
-    pub cursor: i64,
+    pub cursors: HashMap<String, i64>,
     #[serde(default)]
     pub last_sync: Option<String>,
+}
+
+impl SyncSession {
+    pub fn cursor_for(&self, vault_id: &str) -> i64 {
+        self.cursors.get(vault_id).copied().unwrap_or(0)
+    }
+
+    pub fn set_cursor(&mut self, vault_id: &str, cursor: i64) {
+        self.cursors.insert(vault_id.to_string(), cursor);
+    }
 }
 
 impl SyncSession {

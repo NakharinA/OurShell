@@ -14,12 +14,19 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   AgentRpcError,
   Method,
+  type AccountChangePasswordParams,
+  type AccountChangePasswordResult,
+  type AccountLoginParams,
+  type AccountSignupParams,
+  type AccountStatus,
   type AgentStatusPayload,
   type AiStatus,
   type AuditEntry,
   type AuditQuery,
   type DangerousParams,
   type DecideParams,
+  type DeviceInfo,
+  type DeviceRef,
   type ExecParams,
   type ExecResult,
   type ForwardInfo,
@@ -33,6 +40,10 @@ import {
   type ItemRef,
   type KeyGenerateParams,
   type KeyImportParams,
+  type OrgDisableUserParams,
+  type OrgInviteParams,
+  type OrgInviteResult,
+  type OrgUserInfo,
   type PtyOpenParams,
   type PtyOpenResult,
   type PtyResizeParams,
@@ -42,9 +53,19 @@ import {
   type DirEntry,
   type FileData,
   type SessionRef,
+  type SyncReport,
+  type TeamCreateParams,
+  type TeamInfo,
+  type TeamMemberParams,
+  type TeamShareParams,
+  type TeamShareResult,
+  type TotpCodeParams,
+  type TotpSetupResponse,
   type UnlockParams,
   type VaultInitParams,
   type VaultInitResult,
+  type VaultRecoverParams,
+  type VaultRecoverResult,
   type VaultStatus,
   type ImportReport,
   type KeyResult,
@@ -267,6 +288,77 @@ class AgentClient {
 
   hello(): Promise<HelloResult> {
     return this.call(Method.HELLO);
+  }
+
+  // ----- sync / account -----
+
+  syncRun(): Promise<SyncReport> {
+    return this.call(Method.SYNC_RUN, { server: null });
+  }
+  vaultRecover(params: VaultRecoverParams): Promise<VaultRecoverResult> {
+    return this.call(Method.VAULT_RECOVER, params);
+  }
+  accountSignup(params: AccountSignupParams): Promise<AccountStatus> {
+    return this.call(Method.ACCOUNT_SIGNUP, params);
+  }
+  accountLogin(params: AccountLoginParams): Promise<AccountStatus> {
+    return this.call(Method.ACCOUNT_LOGIN, params);
+  }
+  accountLogout(): Promise<void> {
+    return this.call(Method.ACCOUNT_LOGOUT);
+  }
+  accountStatus(): Promise<AccountStatus> {
+    return this.call(Method.ACCOUNT_STATUS);
+  }
+  accountDevices(): Promise<DeviceInfo[]> {
+    return this.call(Method.ACCOUNT_DEVICES);
+  }
+  accountRevokeDevice(ref: DeviceRef): Promise<void> {
+    return this.call(Method.ACCOUNT_REVOKE_DEVICE, ref);
+  }
+  accountTotpSetup(): Promise<TotpSetupResponse> {
+    return this.call(Method.ACCOUNT_TOTP_SETUP);
+  }
+  accountTotpConfirm(params: TotpCodeParams): Promise<void> {
+    return this.call(Method.ACCOUNT_TOTP_CONFIRM, params);
+  }
+  accountTotpDisable(params: TotpCodeParams): Promise<void> {
+    return this.call(Method.ACCOUNT_TOTP_DISABLE, params);
+  }
+  accountChangePassword(
+    params: AccountChangePasswordParams,
+  ): Promise<AccountChangePasswordResult> {
+    return this.call(Method.ACCOUNT_CHANGE_PASSWORD, params);
+  }
+
+  // ----- team vaults -----
+
+  teamCreate(params: TeamCreateParams): Promise<TeamInfo> {
+    return this.call(Method.TEAM_CREATE, params);
+  }
+  teamList(): Promise<TeamInfo[]> {
+    return this.call(Method.TEAM_LIST);
+  }
+  teamAddMember(params: TeamMemberParams): Promise<void> {
+    return this.call(Method.TEAM_ADD_MEMBER, params);
+  }
+  teamRemoveMember(params: TeamMemberParams): Promise<void> {
+    return this.call(Method.TEAM_REMOVE_MEMBER, params);
+  }
+  teamShare(params: TeamShareParams): Promise<TeamShareResult> {
+    return this.call(Method.TEAM_SHARE, params);
+  }
+
+  // ----- org administration -----
+
+  orgInvite(params: OrgInviteParams): Promise<OrgInviteResult> {
+    return this.call(Method.ORG_INVITE, params);
+  }
+  orgUsers(): Promise<OrgUserInfo[]> {
+    return this.call(Method.ORG_USERS);
+  }
+  orgDisableUser(params: OrgDisableUserParams): Promise<void> {
+    return this.call(Method.ORG_DISABLE_USER, params);
   }
 }
 

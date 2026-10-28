@@ -11,6 +11,7 @@ use super::{aead, random_bytes, seal, sign, CryptoError, Result, SymmetricKey};
 
 const AAD_ACCOUNT_KEYS: &[u8] = b"ourshell:account-keys";
 const AAD_RECOVERY: &[u8] = b"ourshell:recovery";
+const AAD_RECOVERY_ACCOUNT: &[u8] = b"ourshell:recovery-account";
 const SIGN_DOMAIN: &[u8] = b"ourshell:item:v1";
 
 /// The account's X25519 (encryption) and Ed25519 (signing) key pairs.
@@ -101,6 +102,37 @@ pub fn unwrap_with_recovery(recovery: &SymmetricKey, wrapped: &[u8]) -> Result<S
     Ok(SymmetricKey::from_bytes(bytes))
 }
 
+/// Wraps the account's enc/sign secret keys under the recovery key, so a
+/// recovery can restore the *same* account keys (no re-signing, no desync
+/// with a sync server or other devices). See `docs/self-hosting.md`.
+pub fn wrap_account_with_recovery(
+    recovery: &SymmetricKey,
+    account: &AccountKeys,
+) -> Result<Vec<u8>> {
+    let mut buf = Zeroizing::new([0u8; 64]);
+    buf[..32].copy_from_slice(account.enc_secret.as_bytes());
+    buf[32..].copy_from_slice(&account.sign_secret.to_bytes());
+    aead::encrypt(recovery, buf.as_ref(), AAD_RECOVERY_ACCOUNT)
+}
+
+pub fn unwrap_account_with_recovery(
+    recovery: &SymmetricKey,
+    wrapped: &[u8],
+) -> Result<AccountKeys> {
+    let pt = Zeroizing::new(aead::decrypt(recovery, wrapped, AAD_RECOVERY_ACCOUNT)?);
+    if pt.len() != 64 {
+        return Err(CryptoError::Format);
+    }
+    let mut a = Zeroizing::new([0u8; 32]);
+    let mut b = Zeroizing::new([0u8; 32]);
+    a.copy_from_slice(&pt[..32]);
+    b.copy_from_slice(&pt[32..]);
+    Ok(AccountKeys {
+        enc_secret: StaticSecret::from(*a),
+        sign_secret: SigningKey::from_bytes(&b),
+    })
+}
+
 /// An encrypted, signed vault item. Everything but the metadata is ciphertext.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemEnvelope {
@@ -176,7 +208,28 @@ impl ItemEnvelope {
 
     /// Verifies the signature, then decrypts.
     pub fn open(&self, vault_key: &SymmetricKey, verifier: &VerifyingKey) -> Result<Vec<u8>> {
-        sign::verify(verifier, &self.signing_bytes(), &self.signature)?;
+        self.open_multi(vault_key, std::slice::from_ref(verifier))
+    }
+
+    /// Like [`Self::open`], but accepts a signature from *any* of
+    /// `verifiers`. Used for shared (team) vaults: membership can change
+    /// over time, so an item must stay verifiable as long as it was signed
+    /// by someone who was a member at the time -- any key in the vault's
+    /// *current* known-member set, not just one fixed signer. See
+    /// `docs/blob-format.md` for why this is preferred over adding an
+    /// explicit `signer` field to the envelope.
+    pub fn open_multi(
+        &self,
+        vault_key: &SymmetricKey,
+        verifiers: &[VerifyingKey],
+    ) -> Result<Vec<u8>> {
+        let bytes = self.signing_bytes();
+        let ok = verifiers
+            .iter()
+            .any(|v| sign::verify(v, &bytes, &self.signature).is_ok());
+        if !ok {
+            return Err(CryptoError::BadSignature);
+        }
         let item_key = self.unwrap_item_key(vault_key)?;
         aead::decrypt(
             &item_key,
@@ -195,16 +248,37 @@ impl ItemEnvelope {
         Ok(SymmetricKey::from_bytes(bytes))
     }
 
-    /// Re-wraps this item's key under another vault key (used for sharing).
+    /// Re-wraps this item's key under another vault's key and moves it to
+    /// `to_vault_id`, leaving the body (`ciphertext`) and `version`
+    /// untouched (only the key wrapping, vault id and signature change).
+    ///
+    /// `ourshell_core::vault::Vault` does *not* use this for sharing a
+    /// personal item into a team vault, even though that looks like the
+    /// obvious use case: both the item key's wrap and the body ciphertext
+    /// bind `id` into their AAD (see [`Self::item_aad`] and
+    /// [`Self::key_aad`]), and the vault's local storage is keyed by a
+    /// single global `id` across all vaults, so a moved item needs a
+    /// fresh id -- which a pure rewrap can't give it without re-deriving
+    /// both AADs, i.e. a full reseal. See `Vault::share_into_vault` and
+    /// `docs/blob-format.md`.
+    ///
+    /// Nor is it used for key *rotation* (removing a team member):
+    /// rotation must bump `version` for the server's
+    /// optimistic-concurrency push to accept it, which runs into the same
+    /// AAD problem. Kept as a tested primitive for a future use that
+    /// genuinely only needs to change where an item's key is wrapped
+    /// (same id, same version).
     pub fn rewrap(
         &self,
         from: &SymmetricKey,
         to: &SymmetricKey,
+        to_vault_id: &str,
         to_key_id: &str,
         signer: &SigningKey,
     ) -> Result<Self> {
         let item_key = self.unwrap_item_key(from)?;
         let mut env = self.clone();
+        env.org_id = to_vault_id.into();
         env.key_id = to_key_id.into();
         env.wrapped_key = aead::encrypt(to, item_key.as_bytes(), &Self::key_aad(&self.id))?;
         env.signature = sign::sign(signer, &env.signing_bytes()).to_vec();
@@ -224,6 +298,26 @@ pub(crate) mod b64 {
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
         let s = String::deserialize(d)?;
         STANDARD.decode(s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Like [`b64`] but for an `Option<Vec<u8>>` (`None` <-> absent/`null`).
+pub(crate) mod opt_b64 {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(b) => s.serialize_some(&STANDARD.encode(b)),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+        let s: Option<String> = Option::deserialize(d)?;
+        s.map(|s| STANDARD.decode(s).map_err(serde::de::Error::custom))
+            .transpose()
     }
 }
 
@@ -310,9 +404,12 @@ mod tests {
     fn rewrap_for_sharing() {
         let (acct, vk, env) = sample();
         let team = SymmetricKey::generate().unwrap();
-        let shared = env.rewrap(&vk, &team, "team1", &acct.sign_secret).unwrap();
+        let shared = env
+            .rewrap(&vk, &team, "team-vault-1", "team1", &acct.sign_secret)
+            .unwrap();
         let vkey = acct.public().verifying().unwrap();
         assert_eq!(shared.open(&team, &vkey).unwrap(), b"{\"h\":1}");
         assert_eq!(shared.ciphertext, env.ciphertext);
+        assert_eq!(shared.org_id, "team-vault-1");
     }
 }

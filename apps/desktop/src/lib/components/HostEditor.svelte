@@ -75,10 +75,12 @@
   }
 </script>
 
+<svelte:window on:keydown={(e) => state && e.key === "Escape" && close()} />
+
 {#if state}
-  <div class="modal-backdrop" on:click={close}>
-    <div class="modal" on:click|stopPropagation>
-      <h2>{record ? "Edit host" : "New host"}</h2>
+  <div class="modal-backdrop" role="presentation" on:click|self={close}>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="host-editor-title">
+      <h2 id="host-editor-title">{record ? "Edit host" : "New host"}</h2>
       <div class="grid">
         <label>
           Name

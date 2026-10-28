@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -49,6 +51,12 @@ jobs:
       - name: Checksums
         shell: bash
         run: cd dist && (sha256sum ourshell-* 2>/dev/null || shasum -a 256 ourshell-*) | grep -v '/$' > SHA256SUMS-${{ matrix.target }}.txt || true
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*.tar.gz
       - uses: softprops/action-gh-release@v2
         with:
           files: |

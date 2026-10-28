@@ -157,9 +157,11 @@ pub async fn finish(
         .execute(state.pool())
         .await?;
 
+    let recovery_account_wrap: Option<&[u8]> = (!body.account.recovery_account_wrap.is_empty())
+        .then_some(body.account.recovery_account_wrap.as_slice());
     sqlx::query(
-        "INSERT INTO account_keys (user_id, org_id, enc_public, sign_public, kdf, wrapped_account_keys) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO account_keys (user_id, org_id, enc_public, sign_public, kdf, wrapped_account_keys, recovery_account_wrap) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(user_id)
     .bind(org_id)
@@ -167,6 +169,7 @@ pub async fn finish(
     .bind(&body.account.sign_public)
     .bind(&body.account.kdf)
     .bind(&body.account.wrapped_account_keys)
+    .bind(recovery_account_wrap)
     .execute(state.pool())
     .await?;
 
@@ -219,6 +222,7 @@ pub async fn finish(
             sign_public: body.account.sign_public,
             kdf: body.account.kdf,
             wrapped_account_keys: body.account.wrapped_account_keys,
+            recovery_account_wrap: body.account.recovery_account_wrap,
         },
         vaults: vec![VaultKeyInfo {
             vault_id: body.vault.vault_id,

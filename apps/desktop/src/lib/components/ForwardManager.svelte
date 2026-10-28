@@ -56,10 +56,12 @@
   $: if ($showForwards) void refresh();
 </script>
 
+<svelte:window on:keydown={(e) => $showForwards && e.key === "Escape" && close()} />
+
 {#if $showForwards}
-  <div class="modal-backdrop" on:click={close}>
-    <div class="modal wide" on:click|stopPropagation>
-      <h2>Port forwards</h2>
+  <div class="modal-backdrop" role="presentation" on:click|self={close}>
+    <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="forwards-title">
+      <h2 id="forwards-title">Port forwards</h2>
       <table>
         <thead>
           <tr><th>Host</th><th>Kind</th><th>Bind</th><th>Destination</th><th></th></tr>

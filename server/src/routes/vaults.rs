@@ -1,7 +1,9 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use ourshell_proto::sync::{AddVaultMemberRequest, CreateVaultRequest, IdResponse};
+use ourshell_proto::sync::{
+    AddVaultMemberRequest, CreateVaultRequest, IdResponse, VaultMemberInfo, VaultMembersResponse,
+};
 
 use crate::auth::AuthUser;
 use crate::db;
@@ -126,6 +128,46 @@ pub async fn add_member(
     .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Every current member of a vault, with the public keys a client needs
+/// to seal a new key to them (rotation) or accept their item signatures.
+pub async fn list_members(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(vault_id): Path<String>,
+) -> AppResult<Json<VaultMembersResponse>> {
+    let vault_id = db::parse_uuid(&vault_id, "vault_id")?;
+    if !db::is_vault_member(state.pool(), vault_id, auth.user_id).await? {
+        return Err(AppError::forbidden(
+            "not_a_member",
+            "you are not a member of this vault",
+        ));
+    }
+    type Row = (uuid::Uuid, String, String, String);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT u.id, u.email, ak.enc_public, ak.sign_public \
+         FROM vault_members vm \
+         JOIN users u ON u.id = vm.user_id \
+         JOIN account_keys ak ON ak.user_id = u.id \
+         WHERE vm.vault_id = $1 \
+         ORDER BY u.email",
+    )
+    .bind(vault_id)
+    .fetch_all(state.pool())
+    .await?;
+    let members = rows
+        .into_iter()
+        .map(
+            |(user_id, email, enc_public, sign_public)| VaultMemberInfo {
+                user_id: user_id.to_string(),
+                email,
+                enc_public,
+                sign_public,
+            },
+        )
+        .collect();
+    Ok(Json(VaultMembersResponse { members }))
 }
 
 pub async fn remove_member(

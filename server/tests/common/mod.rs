@@ -217,6 +217,7 @@ pub async fn register_user(
                 sign_public: "sign-pub".to_string(),
                 kdf: "{}".to_string(),
                 wrapped_account_keys: b"wrapped-account-keys".to_vec(),
+                recovery_account_wrap: Vec::new(),
             },
             vault: VaultUpload {
                 vault_id,

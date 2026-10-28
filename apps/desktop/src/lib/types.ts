@@ -82,6 +82,25 @@ export const Method = {
   AI_AUDIT: "ai.audit",
   EVENTS_SUBSCRIBE: "events.subscribe",
   SYNC_RUN: "sync.run",
+  VAULT_RECOVER: "vault.recover",
+  ACCOUNT_SIGNUP: "account.signup",
+  ACCOUNT_LOGIN: "account.login",
+  ACCOUNT_LOGOUT: "account.logout",
+  ACCOUNT_STATUS: "account.status",
+  ACCOUNT_DEVICES: "account.devices",
+  ACCOUNT_REVOKE_DEVICE: "account.revoke_device",
+  ACCOUNT_TOTP_SETUP: "account.totp_setup",
+  ACCOUNT_TOTP_CONFIRM: "account.totp_confirm",
+  ACCOUNT_TOTP_DISABLE: "account.totp_disable",
+  ACCOUNT_CHANGE_PASSWORD: "account.change_password",
+  TEAM_CREATE: "team.create",
+  TEAM_LIST: "team.list",
+  TEAM_ADD_MEMBER: "team.add_member",
+  TEAM_REMOVE_MEMBER: "team.remove_member",
+  TEAM_SHARE: "team.share",
+  ORG_INVITE: "org.invite",
+  ORG_USERS: "org.users",
+  ORG_DISABLE_USER: "org.disable_user",
   SHUTDOWN: "agent.shutdown",
 } as const;
 
@@ -150,6 +169,8 @@ export interface ItemRecord<T = unknown> {
   id: string;
   kind: ItemKind;
   item: T;
+  /** Which vault (personal or team) this item lives in. */
+  vault_id?: string | null;
 }
 
 export interface ItemRef {
@@ -455,4 +476,135 @@ export interface ImportReport {
   identities_added: number;
   groups_added: number;
   warnings: string[];
+}
+
+// ----- Account / sync (crates/proto/src/agent.rs, sync.rs) -----
+
+export interface AccountSignupParams {
+  server: string;
+  email: string;
+  password: string;
+  invite_code?: string | null;
+  device_name?: string | null;
+}
+
+export interface AccountLoginParams {
+  server: string;
+  email: string;
+  password: string;
+  totp?: string | null;
+  device_name?: string | null;
+}
+
+export interface AccountStatus {
+  signed_in: boolean;
+  server?: string | null;
+  email?: string | null;
+  device_id?: string | null;
+  last_sync?: string | null;
+}
+
+export interface DeviceRef {
+  device_id: string;
+}
+
+export interface DeviceInfo {
+  device_id: string;
+  name: string;
+  public_key: string;
+  created_at: string;
+  revoked: boolean;
+}
+
+export interface TotpCodeParams {
+  code: string;
+}
+
+export interface TotpSetupResponse {
+  secret_base32: string;
+  otpauth_url: string;
+}
+
+export interface VaultRecoverParams {
+  phrase: string;
+  new_password: string;
+}
+
+export interface VaultRecoverResult {
+  server_updated?: boolean;
+  server_error?: string;
+}
+
+/** `account.change_password` params. `old_password` is only needed if the
+ * vault isn't already unlocked. */
+export interface AccountChangePasswordParams {
+  old_password?: string | null;
+  new_password: string;
+}
+
+export interface AccountChangePasswordResult {
+  server_updated: boolean;
+}
+
+export interface SyncReport {
+  pushed: number;
+  pulled: number;
+  conflicts: number;
+}
+
+// ----- Team vaults / org administration -----
+
+export interface TeamCreateParams {
+  name: string;
+  members?: string[];
+}
+
+/** One team (or the personal) vault this account has a key for. */
+export interface TeamInfo {
+  vault_id: string;
+  key_id: string;
+  name: string;
+  /** "personal" or "team". */
+  kind: "personal" | "team";
+  role: string;
+}
+
+export interface TeamMemberParams {
+  /** Team vault id or name. */
+  team: string;
+  email: string;
+}
+
+export interface TeamShareParams {
+  /** The item's id (resolve a name with `item.get` first). */
+  item_id: string;
+  /** Team vault id or name. */
+  team: string;
+}
+
+export interface TeamShareResult {
+  /** The item's new id in the team vault (sharing can't keep the old one). */
+  new_id: string;
+}
+
+export type OrgRole = "Owner" | "Admin" | "Member";
+
+export interface OrgInviteParams {
+  /** "admin" or "member" (default). */
+  role?: string | null;
+}
+
+export interface OrgInviteResult {
+  code: string;
+}
+
+export interface OrgUserInfo {
+  user_id: string;
+  email: string;
+  role: OrgRole;
+  disabled: boolean;
+}
+
+export interface OrgDisableUserParams {
+  user_id: string;
 }
