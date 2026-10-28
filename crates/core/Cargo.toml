@@ -35,4 +35,5 @@ x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 zeroize = { version = "1.9.1", features = ["derive"] }
 
 [dev-dependencies]
+rand = "0.10"
 tempfile = "3.27.0"

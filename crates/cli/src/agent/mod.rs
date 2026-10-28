@@ -6,7 +6,7 @@
 mod ai;
 mod items;
 pub mod policy;
-mod ssh_ops;
+pub mod ssh_ops;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -53,6 +53,7 @@ pub struct State {
     pub clients: std::sync::atomic::AtomicUsize,
     pub last_disconnect: Mutex<Instant>,
     pub policy: std::sync::Mutex<policy::Policy>,
+    pub ssh: ssh_ops::SshState,
     pub shutdown: tokio::sync::Notify,
 }
 
@@ -85,6 +86,10 @@ pub fn vault_err(e: VaultError) -> RpcError {
         VaultError::NotFound(id) => err(rpc::NOT_FOUND, format!("not found: {id}")),
         VaultError::WrongKind { .. } => err(rpc::NOT_FOUND, e.to_string()),
         VaultError::WrongPassword => err(rpc::INVALID_PARAMS, "wrong master password"),
+        VaultError::Exists(what) => err(
+            rpc::INVALID_PARAMS,
+            format!("{} already exists", what.display()),
+        ),
         other => err(rpc::INTERNAL_ERROR, other.to_string()),
     }
 }
@@ -103,12 +108,18 @@ impl State {
             clients: Default::default(),
             last_disconnect: Mutex::new(Instant::now()),
             policy: Default::default(),
+            ssh: Default::default(),
             shutdown: Default::default(),
         })
     }
 
     pub fn emit(&self, method: &str, params: Value) {
         let _ = self.events.send(Notification::new(method, params));
+    }
+
+    /// Counts as user activity for the auto-lock timer.
+    pub async fn touch(&self) {
+        self.vault.lock().await.last_activity = Instant::now();
     }
 
     /// Runs `f` with the unlocked vault, refreshing the auto-lock timer.
@@ -433,6 +444,14 @@ pub async fn dispatch(
             Ok(json!({}))
         }
         m if m.starts_with("ai.") => ai::dispatch(state, conn, m, params).await,
+        m if m.starts_with("pty.")
+            || m.starts_with("sftp.")
+            || m.starts_with("forward.")
+            || m == method::EXEC_RUN
+            || m == method::HOSTKEY_TRUST =>
+        {
+            ssh_ops::dispatch(state, conn, m, params).await
+        }
         m if m.starts_with("item.") || m.starts_with("key.") || m.starts_with("import.") => {
             items::dispatch(state, m, params).await
         }
