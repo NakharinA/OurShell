@@ -3,7 +3,9 @@
 mod account;
 mod ai;
 mod items;
+mod org;
 mod ssh;
+mod team;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -14,8 +16,8 @@ use ourshell::agent::{self, AgentOptions};
 use ourshell::client::{hello, AgentClient};
 use ourshell_core::vault::Vault;
 use ourshell_proto::agent::{
-    method, AccountStatus, ClientKind, SyncParams, SyncReport, UnlockParams, VaultInitParams,
-    VaultInitResult, VaultRecoverParams, VaultStatus,
+    method, AccountChangePasswordParams, AccountStatus, ClientKind, SyncParams, SyncReport,
+    UnlockParams, VaultInitParams, VaultInitResult, VaultRecoverParams, VaultStatus,
 };
 use ourshell_proto::rpc;
 use serde_json::json;
@@ -54,6 +56,12 @@ pub enum Command {
     /// Sign up, sign in on a new device, and manage the synced account.
     #[command(subcommand)]
     Account(account::AccountCmd),
+    /// Create and manage team vaults.
+    #[command(subcommand)]
+    Team(team::TeamCmd),
+    /// Org administration: invites and user management (admin/owner only).
+    #[command(subcommand)]
+    Org(org::OrgCmd),
     /// Push local changes and pull remote ones from the sync server.
     Sync,
     /// Open an interactive shell on a saved host.
@@ -116,6 +124,8 @@ pub enum VaultCmd {
     StopAgent,
     /// Reset the master password using the recovery phrase shown at `vault init`.
     Recover,
+    /// Change the master password (also updates the sync server if signed in).
+    Passwd,
 }
 
 /// Reads a secret from `$OURSHELL_PASSWORD` (for scripts and tests) or the terminal.
@@ -183,6 +193,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Snippet(cmd) => items::snippet(cmd, cli.json).await,
         Command::Ai(cmd) => ai::run(cmd, cli.json).await,
         Command::Account(cmd) => account::run(cmd, cli.json).await,
+        Command::Team(cmd) => team::run(cmd, cli.json).await,
+        Command::Org(cmd) => org::run(cmd, cli.json).await,
         Command::Sync => {
             let c = connect_unlocked().await?;
             let report: SyncReport = c
@@ -309,37 +321,85 @@ async fn vault_cmd(cmd: VaultCmd, json_out: bool) -> Result<()> {
                     bail!("passwords do not match");
                 }
             }
-            c.call::<_, serde_json::Value>(
-                method::VAULT_RECOVER,
-                &VaultRecoverParams {
-                    phrase,
-                    new_password,
-                },
-            )
-            .await
-            .map_err(friendly)?;
+            let result: serde_json::Value = c
+                .call(
+                    method::VAULT_RECOVER,
+                    &VaultRecoverParams {
+                        phrase,
+                        new_password,
+                    },
+                )
+                .await
+                .map_err(friendly)?;
             println!("Vault recovered; master password changed.");
 
-            if let Ok(status) = c
-                .call::<_, AccountStatus>(method::ACCOUNT_STATUS, &json!({}))
-                .await
-            {
-                if status.signed_in {
-                    eprintln!();
-                    eprintln!(
-                        "WARNING: this vault is signed in to {} as {}.",
-                        status.server.unwrap_or_default(),
-                        status.email.unwrap_or_default()
-                    );
-                    eprintln!(
-                        "Recovering regenerated your account's signing/encryption keys locally, \
-                         but the sync server (and any other signed-in device) still has the OLD \
-                         keys on file -- there is currently no server endpoint to update them. \
-                         Sync may fail to verify items from other devices until you sign out and \
-                         set up a fresh account. See docs/self-hosting.md, \"Recovering a vault \
-                         that is signed in to a server\"."
-                    );
+            match result.get("server_updated").and_then(|v| v.as_bool()) {
+                Some(true) => println!("Sync server updated; other devices can keep syncing."),
+                Some(false) => {
+                    let msg = result
+                        .get("server_error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("updating the sync server failed for an unknown reason");
+                    eprintln!("\nWARNING: {msg}");
                 }
+                None => {
+                    // Not signed in to a server, or an older vault format
+                    // that regenerated its account keys locally (see
+                    // docs/self-hosting.md's narrowed "known gap").
+                    if let Ok(status) = c
+                        .call::<_, AccountStatus>(method::ACCOUNT_STATUS, &json!({}))
+                        .await
+                    {
+                        if status.signed_in {
+                            eprintln!();
+                            eprintln!(
+                                "WARNING: this vault is signed in to {} as {}, but its account \
+                                 keys could not be pushed there (this vault predates \
+                                 recovery-preserves-keys support, so recovering regenerated a new \
+                                 signing/encryption keypair). Sync may fail to verify items from \
+                                 other devices until you sign out and set up a fresh account. See \
+                                 docs/self-hosting.md.",
+                                status.server.unwrap_or_default(),
+                                status.email.unwrap_or_default()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        VaultCmd::Passwd => {
+            let c = connect().await?;
+            let st: VaultStatus = c.call(method::VAULT_STATUS, &json!({})).await?;
+            let old_password = if st.unlocked {
+                None
+            } else {
+                Some(read_secret("Current master password: ")?)
+            };
+            let new_password = read_secret("New master password: ")?;
+            if std::env::var("OURSHELL_PASSWORD").is_err() {
+                let again = read_secret("Repeat new master password: ")?;
+                if again != new_password {
+                    bail!("passwords do not match");
+                }
+            }
+            let result: serde_json::Value = c
+                .call(
+                    method::ACCOUNT_CHANGE_PASSWORD,
+                    &AccountChangePasswordParams {
+                        old_password,
+                        new_password,
+                    },
+                )
+                .await
+                .map_err(friendly)?;
+            if json_out {
+                println!("{}", serde_json::to_string(&result)?);
+            } else if result.get("server_updated").and_then(|v| v.as_bool()) == Some(true) {
+                println!(
+                    "Master password changed; sync server updated (other devices signed out)."
+                );
+            } else {
+                println!("Master password changed (not signed in to a sync server).");
             }
         }
     }

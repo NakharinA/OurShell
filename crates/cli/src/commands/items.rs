@@ -1,11 +1,24 @@
 //! `host`, `identity` and `snippet` subcommands.
 
+use std::collections::HashMap;
+
 use anyhow::{bail, Result};
 use clap::{Args, Subcommand};
-use ourshell_proto::agent::{method, ItemListParams, ItemPutParams, ItemRecord, ItemRef};
+use ourshell_proto::agent::{method, ItemListParams, ItemPutParams, ItemRecord, ItemRef, TeamInfo};
 use serde_json::{json, Map, Value};
 
 use super::{connect_unlocked, friendly, read_secret};
+use ourshell::client::AgentClient;
+
+/// `vault_id -> display name` for every vault this account can open, so
+/// listings can show a human name instead of a raw id.
+async fn vault_names(c: &AgentClient) -> Result<HashMap<String, String>> {
+    let teams: Vec<TeamInfo> = c
+        .call(method::TEAM_LIST, &json!({}))
+        .await
+        .map_err(friendly)?;
+    Ok(teams.into_iter().map(|t| (t.vault_id, t.name)).collect())
+}
 
 #[derive(Subcommand)]
 pub enum HostCmd {
@@ -289,14 +302,21 @@ pub async fn host(cmd: HostCmd, json_out: bool) -> Result<()> {
                 println!("No hosts. Add one with `ourshell host add <name> <user@host>`.");
                 return Ok(());
             }
+            let names = vault_names(&c).await.unwrap_or_default();
             println!(
-                "{:<20} {:<32} {:<6} {:<12} {:<4}",
-                "NAME", "ADDRESS", "PORT", "USER", "AI"
+                "{:<20} {:<32} {:<6} {:<12} {:<4} {:<12}",
+                "NAME", "ADDRESS", "PORT", "USER", "AI", "VAULT"
             );
             for h in hosts {
                 let i = &h.item;
+                let vault = h
+                    .vault_id
+                    .as_deref()
+                    .and_then(|v| names.get(v))
+                    .map(String::as_str)
+                    .unwrap_or("Personal");
                 println!(
-                    "{:<20} {:<32} {:<6} {:<12} {:<4}",
+                    "{:<20} {:<32} {:<6} {:<12} {:<4} {:<12}",
                     s(i, "name"),
                     s(i, "hostname"),
                     i["port"].as_u64().unwrap_or(22),
@@ -305,7 +325,8 @@ pub async fn host(cmd: HostCmd, json_out: bool) -> Result<()> {
                         "yes"
                     } else {
                         ""
-                    }
+                    },
+                    vault
                 );
             }
         }

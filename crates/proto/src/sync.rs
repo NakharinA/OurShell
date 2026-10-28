@@ -51,6 +51,13 @@ pub struct AccountKeysUpload {
     pub kdf: String,
     #[serde(with = "crate::b64")]
     pub wrapped_account_keys: Vec<u8>,
+    /// The account's enc/sign secret keys, wrapped a second time under the
+    /// vault's recovery key (empty = this vault predates the field, or a
+    /// password change never had one to carry forward). Stored server-side
+    /// so a brand-new device logging in also gets the ability to recover
+    /// without regenerating keys. See `docs/self-hosting.md`.
+    #[serde(default, with = "crate::b64")]
+    pub recovery_account_wrap: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -264,4 +271,64 @@ pub struct PublicKeysResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IdResponse {
     pub id: String,
+}
+
+/// One member of a (team) vault, with the public keys a client needs to
+/// seal a new vault key to them (rotation) or to accept their item
+/// signatures. `GET /v1/vaults/{vault_id}/members`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VaultMemberInfo {
+    pub user_id: String,
+    pub email: String,
+    pub enc_public: String,
+    pub sign_public: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VaultMembersResponse {
+    pub members: Vec<VaultMemberInfo>,
+}
+
+// ----- account password change / recovery-while-signed-in -----
+//
+// A fresh OPAQUE registration (same two-step shape as `/register/*`) that
+// replaces the *current* user's password file, authenticated by session
+// token instead of an invite/email. `finish` also atomically replaces the
+// account_keys row (kdf, wrapped_account_keys, and public keys for the rare
+// case a legacy vault without `recovery_account_wrap` had to regenerate its
+// account keypair during recovery) and revokes every other session.
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AccountPasswordStart {
+    #[serde(with = "crate::b64")]
+    pub registration_request: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AccountPasswordStartResponse {
+    pub registration_id: String,
+    #[serde(with = "crate::b64")]
+    pub registration_response: Vec<u8>,
+}
+
+/// `GET /v1/account/vaults`: the current user's up-to-date vault list, so
+/// an already-signed-in session can pick up a team vault it was just
+/// added to (or notice it was removed from one) without a fresh login.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AccountVaultsResponse {
+    pub vaults: Vec<VaultKeyInfo>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AccountPasswordFinish {
+    pub registration_id: String,
+    #[serde(with = "crate::b64")]
+    pub registration_upload: Vec<u8>,
+    pub enc_public: String,
+    pub sign_public: String,
+    pub kdf: String,
+    #[serde(with = "crate::b64")]
+    pub wrapped_account_keys: Vec<u8>,
+    #[serde(default, with = "crate::b64")]
+    pub recovery_account_wrap: Vec<u8>,
 }

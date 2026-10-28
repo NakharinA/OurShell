@@ -31,11 +31,12 @@ macro_rules! with_kind {
     };
 }
 
-fn record<T: Item>(id: String, item: &T) -> ItemRecord {
+fn record<T: Item>(id: String, vault_id: Option<String>, item: &T) -> ItemRecord {
     ItemRecord {
         id,
         kind: T::KIND.into(),
         item: serde_json::to_value(item).unwrap_or(Value::Null),
+        vault_id,
     }
 }
 
@@ -53,16 +54,19 @@ pub fn redact(mut rec: ItemRecord) -> ItemRecord {
     rec
 }
 
+/// Lists items of this kind across *every* vault the account can open
+/// (personal and team), each tagged with its vault id.
 fn list<T: Item>(v: &mut Vault) -> Result<Vec<ItemRecord>, VaultError> {
-    Ok(v.list::<T>()?
+    Ok(v.list_all::<T>()?
         .into_iter()
-        .map(|(id, it)| redact(record(id, &it)))
+        .map(|(id, vault_id, it)| redact(record(id, Some(vault_id), &it)))
         .collect())
 }
 
 fn get<T: Item>(v: &mut Vault, id: &str) -> Result<ItemRecord, VaultError> {
     let (id, it) = v.find::<T>(id)?;
-    Ok(redact(record(id, &it)))
+    let vault_id = v.vault_of(&id).ok();
+    Ok(redact(record(id, vault_id, &it)))
 }
 
 fn put<T: Item>(v: &mut Vault, p: &ItemPutParams) -> Result<String, VaultError> {

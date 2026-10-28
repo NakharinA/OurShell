@@ -11,11 +11,13 @@ use std::time::Instant;
 use ourshell_core::sync::{self, SyncError, SyncSession};
 use ourshell_core::vault::{Vault, VaultError};
 use ourshell_proto::agent::{
-    event, method, AccountLoginParams, AccountSignupParams, AccountStatus, DeviceRef, SyncParams,
-    SyncReport, TotpCodeParams, VaultRecoverParams,
+    event, method, AccountChangePasswordParams, AccountLoginParams, AccountSignupParams,
+    AccountStatus, DeviceRef, OrgDisableUserParams, OrgInviteParams, OrgInviteResult, SyncParams,
+    SyncReport, TeamCreateParams, TeamInfo, TeamMemberParams, TeamShareParams, TeamShareResult,
+    TotpCodeParams, VaultRecoverParams,
 };
 use ourshell_proto::rpc::{self, RpcError};
-use ourshell_proto::sync::{DeviceInfo, TotpSetupResponse};
+use ourshell_proto::sync::{DeviceInfo, OrgRole, OrgUserInfo, TotpSetupResponse};
 use serde_json::{json, Value};
 
 use super::{err, parse, to_value, vault_err, RpcResult, State};
@@ -40,6 +42,10 @@ pub async fn dispatch(state: &Arc<State>, m: &str, params: Value) -> RpcResult {
             let p: TotpCodeParams = parse(params)?;
             account_totp_disable(state, p).await
         }
+        method::ACCOUNT_CHANGE_PASSWORD => {
+            let p: AccountChangePasswordParams = parse(params)?;
+            account_change_password(state, p).await
+        }
         method::SYNC_RUN => {
             let p: SyncParams = parse(params)?;
             sync_run(state, p).await
@@ -47,6 +53,32 @@ pub async fn dispatch(state: &Arc<State>, m: &str, params: Value) -> RpcResult {
         method::VAULT_RECOVER => {
             let p: VaultRecoverParams = parse(params)?;
             vault_recover(state, p).await
+        }
+        method::TEAM_CREATE => {
+            let p: TeamCreateParams = parse(params)?;
+            team_create(state, p).await
+        }
+        method::TEAM_LIST => team_list(state).await,
+        method::TEAM_ADD_MEMBER => {
+            let p: TeamMemberParams = parse(params)?;
+            team_add_member(state, p).await
+        }
+        method::TEAM_REMOVE_MEMBER => {
+            let p: TeamMemberParams = parse(params)?;
+            team_remove_member(state, p).await
+        }
+        method::TEAM_SHARE => {
+            let p: TeamShareParams = parse(params)?;
+            team_share(state, p).await
+        }
+        method::ORG_INVITE => {
+            let p: OrgInviteParams = parse(params)?;
+            org_invite(state, p).await
+        }
+        method::ORG_USERS => org_users(state).await,
+        method::ORG_DISABLE_USER => {
+            let p: OrgDisableUserParams = parse(params)?;
+            org_disable_user(state, p).await
         }
         _ => Err(err(rpc::METHOD_NOT_FOUND, format!("unknown method `{m}`"))),
     }
@@ -293,6 +325,10 @@ pub async fn autosync_tick(state: &Arc<State>) {
     }
 }
 
+/// Recovers from the 24-word phrase and sets a new master password. If
+/// this vault is signed in to a sync server, also pushes the recovered
+/// account key material there (best-effort: local recovery has already
+/// succeeded either way -- see `docs/self-hosting.md`).
 async fn vault_recover(state: &Arc<State>, p: VaultRecoverParams) -> RpcResult {
     let path = state.opts.vault_path.clone();
     let mut slot = state.vault.lock().await;
@@ -309,7 +345,196 @@ async fn vault_recover(state: &Arc<State>, p: VaultRecoverParams) -> RpcResult {
     slot.vault = Some(vault);
     res.map_err(vault_err)?;
     slot.last_activity = Instant::now();
+
+    let mut result = json!({});
+    let vault = slot.vault.as_mut().expect("just set");
+    let session_and_material = SyncSession::load(vault)
+        .ok()
+        .flatten()
+        .map(|session| (session, sync::AccountKeyMaterial::from(&*vault)));
+    if let Some((session, material)) = session_and_material {
+        match sync::push_account_keys(&material, &session, &p.new_password).await {
+            Ok(()) => result = json!({"server_updated": true}),
+            Err(e) => {
+                result = json!({
+                    "server_updated": false,
+                    "server_error": format!(
+                        "local recovery succeeded, but updating the sync server failed ({e}). \
+                         Your session may have expired -- log in with your OLD password first \
+                         (if you still remember it) and run `vault recover` again, or ask an \
+                         org admin to re-invite/disable this account."
+                    ),
+                });
+            }
+        }
+    }
     drop(slot);
     state.emit(event::VAULT_UNLOCKED, json!({}));
+    Ok(result)
+}
+
+/// Changes the master password, both locally and (if signed in) on the
+/// sync server. If the vault is locked, `old_password` unlocks it first.
+async fn account_change_password(state: &Arc<State>, p: AccountChangePasswordParams) -> RpcResult {
+    let mut slot = state.vault.lock().await;
+    slot.last_activity = Instant::now();
+    let vault = match slot.vault.as_mut() {
+        Some(v) => v,
+        None => {
+            return Err(err(
+                rpc::NOT_FOUND,
+                "no vault yet; run `ourshell vault init`",
+            ))
+        }
+    };
+    if !vault.is_unlocked() {
+        let pw = p.old_password.as_deref().ok_or_else(|| {
+            err(
+                rpc::VAULT_LOCKED,
+                "vault is locked; pass old_password to unlock it first",
+            )
+        })?;
+        tokio::task::block_in_place(|| vault.unlock(pw)).map_err(vault_err)?;
+    }
+    let session = SyncSession::load(vault).map_err(sync_err)?;
+    let server_updated = session.is_some();
+    sync::change_password(vault, session.as_ref(), &p.new_password)
+        .await
+        .map_err(sync_err)?;
+    slot.last_activity = Instant::now();
+    Ok(json!({"server_updated": server_updated}))
+}
+
+// ----- team vaults / org administration -----
+
+fn team_err(e: ourshell_core::vault::VaultError) -> RpcError {
+    vault_err(e)
+}
+
+fn team_info_of(v: &ourshell_core::vault::VaultInfo) -> TeamInfo {
+    TeamInfo {
+        vault_id: v.vault_id.clone(),
+        key_id: v.key_id.clone(),
+        name: v.name.clone(),
+        kind: v.kind.clone(),
+        role: v.role.clone(),
+    }
+}
+
+/// Resolves a team vault by id or (case-insensitive) name.
+fn resolve_team(vault: &Vault, team: &str) -> std::result::Result<String, RpcError> {
+    let vaults = vault.vaults().map_err(team_err)?;
+    if let Some(v) = vaults.iter().find(|v| v.vault_id == team) {
+        return Ok(v.vault_id.clone());
+    }
+    vaults
+        .iter()
+        .find(|v| v.kind == "team" && v.name.eq_ignore_ascii_case(team))
+        .map(|v| v.vault_id.clone())
+        .ok_or_else(|| err(rpc::NOT_FOUND, format!("no team vault named `{team}`")))
+}
+
+async fn team_create(state: &Arc<State>, p: TeamCreateParams) -> RpcResult {
+    let session = current_session(state).await?;
+    let mut slot = state.vault.lock().await;
+    let vault = match slot.vault.as_mut() {
+        Some(v) if v.is_unlocked() => v,
+        _ => return Err(err(rpc::VAULT_LOCKED, "vault is locked")),
+    };
+    let info = sync::create_team(vault, &session, &p.name, &p.members)
+        .await
+        .map_err(sync_err)?;
+    to_value(team_info_of(&info))
+}
+
+async fn team_list(state: &Arc<State>) -> RpcResult {
+    let teams = state
+        .with_vault(|v| v.vaults())
+        .await?
+        .into_iter()
+        .map(|v| team_info_of(&v))
+        .collect::<Vec<_>>();
+    to_value(teams)
+}
+
+async fn team_add_member(state: &Arc<State>, p: TeamMemberParams) -> RpcResult {
+    let session = current_session(state).await?;
+    let mut slot = state.vault.lock().await;
+    let vault = match slot.vault.as_mut() {
+        Some(v) if v.is_unlocked() => v,
+        _ => return Err(err(rpc::VAULT_LOCKED, "vault is locked")),
+    };
+    let vault_id = resolve_team(vault, &p.team)?;
+    sync::team_add_member(vault, &session, &vault_id, &p.email)
+        .await
+        .map_err(sync_err)?;
+    Ok(json!({}))
+}
+
+async fn team_remove_member(state: &Arc<State>, p: TeamMemberParams) -> RpcResult {
+    let mut slot = state.vault.lock().await;
+    slot.last_activity = Instant::now();
+    let vault = match slot.vault.as_mut() {
+        Some(v) if v.is_unlocked() => v,
+        _ => return Err(err(rpc::VAULT_LOCKED, "vault is locked")),
+    };
+    let mut session = SyncSession::load(vault)
+        .map_err(sync_err)?
+        .ok_or_else(|| err(rpc::INVALID_PARAMS, "not signed in to a sync server"))?;
+    let vault_id = resolve_team(vault, &p.team)?;
+    sync::team_remove_member(vault, &mut session, &vault_id, &p.email)
+        .await
+        .map_err(sync_err)?;
+    session.save(vault).map_err(sync_err)?;
+    Ok(json!({}))
+}
+
+async fn team_share(state: &Arc<State>, p: TeamShareParams) -> RpcResult {
+    let mut slot = state.vault.lock().await;
+    slot.last_activity = Instant::now();
+    let vault = match slot.vault.as_mut() {
+        Some(v) if v.is_unlocked() => v,
+        _ => return Err(err(rpc::VAULT_LOCKED, "vault is locked")),
+    };
+    let mut session = SyncSession::load(vault)
+        .map_err(sync_err)?
+        .ok_or_else(|| err(rpc::INVALID_PARAMS, "not signed in to a sync server"))?;
+    let vault_id = resolve_team(vault, &p.team)?;
+    let (new_id, _report) = sync::share_item(vault, &mut session, &p.item_id, &vault_id)
+        .await
+        .map_err(sync_err)?;
+    session.save(vault).map_err(sync_err)?;
+    to_value(TeamShareResult { new_id })
+}
+
+async fn org_invite(state: &Arc<State>, p: OrgInviteParams) -> RpcResult {
+    let session = current_session(state).await?;
+    let role = match p.role.as_deref() {
+        Some("admin") => Some(OrgRole::Admin),
+        Some("member") | None => None,
+        Some(other) => {
+            return Err(err(
+                rpc::INVALID_PARAMS,
+                format!("unknown role `{other}` (use admin or member)"),
+            ))
+        }
+    };
+    let code = sync::create_invite(&session, role)
+        .await
+        .map_err(sync_err)?;
+    to_value(OrgInviteResult { code })
+}
+
+async fn org_users(state: &Arc<State>) -> RpcResult {
+    let session = current_session(state).await?;
+    let users: Vec<OrgUserInfo> = sync::org_users(&session).await.map_err(sync_err)?;
+    to_value(users)
+}
+
+async fn org_disable_user(state: &Arc<State>, p: OrgDisableUserParams) -> RpcResult {
+    let session = current_session(state).await?;
+    sync::disable_user(&session, &p.user_id)
+        .await
+        .map_err(sync_err)?;
     Ok(json!({}))
 }

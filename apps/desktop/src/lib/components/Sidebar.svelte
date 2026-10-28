@@ -9,14 +9,23 @@
     showImport,
     showKeys,
     showSnippets,
+    showTeams,
     searchQuery,
   } from "../stores/ui";
   import { pendingApprovals } from "../stores/ai";
   import { refreshVaultStatus } from "../stores/vault";
+  import { refreshTeams, vaultNames } from "../stores/teams";
   import GroupNodeView from "./GroupNodeView.svelte";
   import ThemePicker from "./ThemePicker.svelte";
+  import { onMount } from "svelte";
 
   $: tree = buildGroupTree($groups, $hosts);
+
+  onMount(() => {
+    // Best-effort: a local-only vault has no teams, so this can fail
+    // harmlessly (no vault names are shown then).
+    refreshTeams().catch(() => {});
+  });
 
   async function lock(): Promise<void> {
     await rpc.vaultLock();
@@ -31,7 +40,7 @@
   </div>
 
   <nav class="tree scroll">
-    <GroupNodeView node={tree} filter={$searchQuery} />
+    <GroupNodeView node={tree} filter={$searchQuery} vaultNames={$vaultNames} />
     {#if $hosts.length === 0}
       <p class="text-dim empty-hint">No hosts yet. Click "+" to add one, or use Import below.</p>
     {/if}
@@ -42,6 +51,7 @@
     <button on:click={() => showKeys.set(true)}>Keys</button>
     <button on:click={() => showSnippets.set(true)}>Snippets</button>
     <button on:click={() => showForwards.set(true)}>Port forwards</button>
+    <button on:click={() => showTeams.set(true)}>Teams</button>
     <button on:click={() => showImport.set(true)}>Import…</button>
     <button on:click={() => showAiPanel.set(true)}>
       AI{#if $pendingApprovals.length > 0}<span class="badge">{$pendingApprovals.length}</span>{/if}

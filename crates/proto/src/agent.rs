@@ -46,6 +46,7 @@ pub mod method {
     pub const EVENTS_SUBSCRIBE: &str = "events.subscribe";
     pub const SYNC_RUN: &str = "sync.run";
     pub const VAULT_RECOVER: &str = "vault.recover";
+    pub const ACCOUNT_CHANGE_PASSWORD: &str = "account.change_password";
     pub const ACCOUNT_SIGNUP: &str = "account.signup";
     pub const ACCOUNT_LOGIN: &str = "account.login";
     pub const ACCOUNT_LOGOUT: &str = "account.logout";
@@ -55,6 +56,14 @@ pub mod method {
     pub const ACCOUNT_TOTP_SETUP: &str = "account.totp_setup";
     pub const ACCOUNT_TOTP_CONFIRM: &str = "account.totp_confirm";
     pub const ACCOUNT_TOTP_DISABLE: &str = "account.totp_disable";
+    pub const TEAM_CREATE: &str = "team.create";
+    pub const TEAM_LIST: &str = "team.list";
+    pub const TEAM_ADD_MEMBER: &str = "team.add_member";
+    pub const TEAM_REMOVE_MEMBER: &str = "team.remove_member";
+    pub const TEAM_SHARE: &str = "team.share";
+    pub const ORG_INVITE: &str = "org.invite";
+    pub const ORG_USERS: &str = "org.users";
+    pub const ORG_DISABLE_USER: &str = "org.disable_user";
     pub const SHUTDOWN: &str = "agent.shutdown";
 }
 
@@ -136,6 +145,11 @@ pub struct ItemRecord {
     pub id: String,
     pub kind: String,
     pub item: Value,
+    /// Which vault (personal or team) this item lives in. `None` only
+    /// for records constructed before this field existed; every live
+    /// handler fills it in.
+    #[serde(default)]
+    pub vault_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -447,4 +461,76 @@ pub struct TotpCodeParams {
 pub struct VaultRecoverParams {
     pub phrase: String,
     pub new_password: String,
+}
+
+/// `account.change_password` params. `old_password` is only needed if the
+/// vault isn't already unlocked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountChangePasswordParams {
+    #[serde(default)]
+    pub old_password: Option<String>,
+    pub new_password: String,
+}
+
+// ----- team vaults / org administration -----
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamCreateParams {
+    pub name: String,
+    /// Member emails to seal the new team's key to, besides yourself.
+    #[serde(default)]
+    pub members: Vec<String>,
+}
+
+/// One team (or the personal) vault this account has a key for. Mirrors
+/// `ourshell_core::vault::VaultInfo` (this crate does not depend on
+/// `ourshell-core`, so the agent copies the fields across).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamInfo {
+    pub vault_id: String,
+    pub key_id: String,
+    pub name: String,
+    /// "personal" or "team".
+    pub kind: String,
+    pub role: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamMemberParams {
+    /// Team vault id or name.
+    pub team: String,
+    pub email: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamShareParams {
+    /// The item's id (resolve a name with `item.get` first -- sharing
+    /// doesn't need the item's kind, only its id).
+    pub item_id: String,
+    /// Team vault id or name.
+    pub team: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamShareResult {
+    /// The item's new id in the team vault (sharing can't keep the old
+    /// one -- see `docs/blob-format.md`).
+    pub new_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgInviteParams {
+    /// "admin" or "member" (default).
+    #[serde(default)]
+    pub role: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgInviteResult {
+    pub code: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgDisableUserParams {
+    pub user_id: String,
 }

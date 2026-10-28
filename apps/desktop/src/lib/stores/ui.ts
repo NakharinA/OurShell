@@ -16,6 +16,7 @@ export const showImport = writable(false);
 export const showForwards = writable(false);
 export const showAiPanel = writable(false);
 export const showAuditLog = writable(false);
+export const showTeams = writable(false);
 export const sftpHost = writable<ItemRecord<Host> | null>(null);
 export const dangerousDialogSession = writable<string | null>(null);
 export const searchQuery = writable("");
