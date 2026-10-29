@@ -74,6 +74,7 @@ const en: Dict = {
   "mn.groupParent": "Parent group",
 
   "c.sftp": "Open SFTP",
+  "c.newTab": "Open in new tab",
   "c.runSnip": "Run snippet…",
   "c.move": "Move to group",
   "c.copyAddr": "Copy address",
@@ -445,6 +446,7 @@ const th: Dict = {
   "mn.groupParent": "กลุ่มหลัก",
 
   "c.sftp": "เปิด SFTP",
+  "c.newTab": "เปิดในแท็บใหม่",
   "c.runSnip": "รันสนิปเพ็ต…",
   "c.move": "ย้ายไปกลุ่ม",
   "c.copyAddr": "คัดลอกที่อยู่",
