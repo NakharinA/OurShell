@@ -151,3 +151,17 @@ describe("AgentClient event routing", () => {
     expect(listenMock).toHaveBeenCalledTimes(2); // agent-event + agent-status, not 4
   });
 });
+
+describe("AgentClient initial status", () => {
+  it("asks the bridge for its current status on init", async () => {
+    vi.resetModules();
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (cmd: string) =>
+      cmd === "agent_status" ? { connected: true, detail: "connected" } : null,
+    );
+    const { rpc: fresh } = await import("./rpc");
+    await fresh.init();
+    expect(invokeMock).toHaveBeenCalledWith("agent_status");
+    expect(fresh.getLastStatus()).toEqual({ connected: true, detail: "connected" });
+  });
+});

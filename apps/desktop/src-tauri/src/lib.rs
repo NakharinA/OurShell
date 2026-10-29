@@ -32,7 +32,7 @@ pub fn run() {
             app.manage(handle);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::rpc_call])
+        .invoke_handler(tauri::generate_handler![commands::rpc_call, commands::agent_status])
         .run(tauri::generate_context!())
         .expect("error while running the OurShell desktop app");
 }

@@ -58,7 +58,7 @@ const en: Dict = {
 
   "hosts.title": "Hosts",
   "hosts.new": "New host",
-  "hosts.tip": "Tip: right-click a host to open its menu.",
+  "hosts.tip": "Tip: double-click a host to connect, right-click for more options.",
   "hosts.panel": "New Host",
   "hosts.edit": "Edit Host",
   "hosts.empty": "No hosts yet",
@@ -430,7 +430,7 @@ const th: Dict = {
 
   "hosts.title": "โฮสต์",
   "hosts.new": "เพิ่มโฮสต์",
-  "hosts.tip": "เคล็ดลับ: คลิกขวาที่โฮสต์เพื่อเปิดเมนู",
+  "hosts.tip": "เคล็ดลับ: ดับเบิลคลิกที่โฮสต์เพื่อเชื่อมต่อ คลิกขวาเพื่อดูตัวเลือกเพิ่มเติม",
   "hosts.panel": "โฮสต์ใหม่",
   "hosts.edit": "แก้ไขโฮสต์",
   "hosts.empty": "ยังไม่มีโฮสต์",

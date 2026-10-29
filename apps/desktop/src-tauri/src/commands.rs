@@ -10,6 +10,12 @@ use tauri::State;
 
 use crate::agent::AgentHandle;
 
+/// The bridge's current connection status (`{connected, detail}`).
+#[tauri::command]
+pub fn agent_status() -> Value {
+    crate::agent::last_status()
+}
+
 /// Calls one JSON-RPC method on the agent and returns its `result` (or its
 /// `error`, which the frontend matches on `.code` per `docs/agent-protocol.md`).
 #[tauri::command]
