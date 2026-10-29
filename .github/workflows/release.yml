@@ -31,8 +31,8 @@ jobs:
   check-version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: node scripts/check-version.mjs --tag "${{ github.ref_name }}"
@@ -70,7 +70,7 @@ jobs:
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, ext: "", archive: tar.gz }
           - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, ext: "", archive: tar.gz }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -105,7 +105,7 @@ jobs:
           cat "SHA256SUMS-${{ matrix.target }}.txt"
           echo "ARCHIVE=dist/$archive" >> "$GITHUB_ENV"
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ env.ARCHIVE }}
       - name: Upload to the draft release
@@ -143,9 +143,9 @@ jobs:
             target: aarch64-unknown-linux-gnu
             bundles: deb,rpm,appimage
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -221,7 +221,7 @@ jobs:
 
       # The agent sidecar is built for the same target by the app's
       # beforeBuildCommand (scripts/prepare-sidecar.mjs, using TAURI_ENV_TARGET_TRIPLE).
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -230,7 +230,7 @@ jobs:
           projectPath: apps/desktop
           releaseId: ${{ needs.create-release.outputs.id }}
           # latest.json is generated once by the updater-manifest job.
-          includeUpdaterJson: false
+          uploadUpdaterJson: false
           args: >-
             --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
             ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && '--features updater --config src-tauri/tauri.updater.conf.json' || '' }}
@@ -254,7 +254,7 @@ jobs:
           gh release upload "${{ github.ref_name }}" $files --clobber
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
@@ -269,8 +269,8 @@ jobs:
     if: always() && needs.create-release.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Build and upload latest.json
