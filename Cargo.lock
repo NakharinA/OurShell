@@ -2575,7 +2575,7 @@ dependencies = [
 name = "ourshell-proto"
 version = "0.6.0"
 dependencies = [
- "argon2 0.5.3",
+ "argon2 0.6.0",
  "base64 0.23.1",
  "opaque-ke",
  "rand 0.8.8",
