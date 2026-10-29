@@ -27,6 +27,11 @@ updates:
       # svelte-check doesn't support TypeScript 7 yet.
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
+      # xterm 6 crashes the app at startup under Tauri's freezePrototype
+      # (its bundled keybinding code assigns `toString` on a plain object), and
+      # the 0.11/0.12 add-ons belong to xterm 6. Stay on the xterm 5 family.
+      - dependency-name: "@xterm/*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
