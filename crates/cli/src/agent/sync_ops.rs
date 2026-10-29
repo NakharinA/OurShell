@@ -13,8 +13,8 @@ use ourshell_core::vault::{Vault, VaultError};
 use ourshell_proto::agent::{
     event, method, AccountChangePasswordParams, AccountLoginParams, AccountSignupParams,
     AccountStatus, DeviceRef, OrgDisableUserParams, OrgInviteParams, OrgInviteResult, SyncParams,
-    SyncReport, TeamCreateParams, TeamInfo, TeamMemberParams, TeamRef, TeamShareParams, TeamShareResult,
-    TotpCodeParams, VaultRecoverParams,
+    SyncReport, TeamCreateParams, TeamInfo, TeamMemberParams, TeamRef, TeamShareParams,
+    TeamShareResult, TotpCodeParams, VaultRecoverParams,
 };
 use ourshell_proto::rpc::{self, RpcError};
 use ourshell_proto::sync::{DeviceInfo, OrgRole, OrgUserInfo, TotpSetupResponse};
