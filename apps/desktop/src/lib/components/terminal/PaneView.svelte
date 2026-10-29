@@ -62,6 +62,9 @@
     // contains other interactive content (the header buttons and the
     // terminal session), so it's marked up as role="button" + tabindex
     // instead, with the matching keyboard handler a11y expects.
+    // Only when the pane itself has focus: keys typed into the terminal
+    // bubble up here, and cancelling them would swallow Space and Enter.
+    if (e.target !== e.currentTarget) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       setActivePane(tabId, node.id);
