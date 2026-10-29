@@ -200,6 +200,9 @@ export interface Host {
   jump_host: string | null;
   ai_allowed: boolean;
   ai_user: string | null;
+  /** Let the read-only AI tools (k8s_get/describe/logs/events, system_status) run
+   *  on this host without per-call approval. */
+  ai_readonly_auto: boolean;
   notes: string | null;
   /** Forward the local SSH agent to this host. */
   agent_forwarding: boolean;
@@ -263,6 +266,7 @@ export function emptyHost(): Host {
     jump_host: null,
     ai_allowed: false,
     ai_user: null,
+    ai_readonly_auto: false,
     notes: null,
     agent_forwarding: false,
     terminal_theme: null,

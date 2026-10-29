@@ -73,6 +73,10 @@ pub struct HostEditArgs {
     /// Log in as this user for AI-initiated sessions.
     #[arg(long)]
     pub ai_user: Option<String>,
+    /// Let the read-only AI tools (k8s_get/describe/logs/events, system_status)
+    /// run on this host without per-call approval.
+    #[arg(long)]
+    pub ai_readonly_auto: Option<bool>,
     #[arg(long)]
     pub notes: Option<String>,
     /// New hostname (edit only).
@@ -189,6 +193,9 @@ async fn apply_edits(
     if let Some(u) = &a.ai_user {
         set("ai_user", if u.is_empty() { Value::Null } else { json!(u) });
     }
+    if let Some(b) = a.ai_readonly_auto {
+        set("ai_readonly_auto", json!(b));
+    }
     if let Some(n) = &a.notes {
         set("notes", json!(n));
     }
@@ -304,7 +311,7 @@ pub async fn host(cmd: HostCmd, json_out: bool) -> Result<()> {
             }
             let names = vault_names(&c).await.unwrap_or_default();
             println!(
-                "{:<20} {:<32} {:<6} {:<12} {:<4} {:<12}",
+                "{:<20} {:<32} {:<6} {:<12} {:<6} {:<12}",
                 "NAME", "ADDRESS", "PORT", "USER", "AI", "VAULT"
             );
             for h in hosts {
@@ -316,13 +323,17 @@ pub async fn host(cmd: HostCmd, json_out: bool) -> Result<()> {
                     .map(String::as_str)
                     .unwrap_or("Personal");
                 println!(
-                    "{:<20} {:<32} {:<6} {:<12} {:<4} {:<12}",
+                    "{:<20} {:<32} {:<6} {:<12} {:<6} {:<12}",
                     s(i, "name"),
                     s(i, "hostname"),
                     i["port"].as_u64().unwrap_or(22),
                     s(i, "username"),
                     if i["ai_allowed"].as_bool().unwrap_or(false) {
-                        "yes"
+                        if i["ai_readonly_auto"].as_bool().unwrap_or(false) {
+                            "yes+ro"
+                        } else {
+                            "yes"
+                        }
                     } else {
                         ""
                     },
