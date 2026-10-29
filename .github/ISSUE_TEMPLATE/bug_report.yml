@@ -1,0 +1,41 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "**Security problems:** don't file them here. Use the Security tab → Report a vulnerability."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options: [Desktop app, CLI, Agent, MCP server / AI, Sync server, Other]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: e.g. Windows 11 x64, macOS 15 (arm64), Ubuntu 24.04
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Remove hostnames, IPs, usernames and anything secret first.
