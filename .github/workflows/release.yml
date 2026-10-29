@@ -198,7 +198,7 @@ jobs:
 
       # The agent sidecar is built for the same target by the app's
       # beforeBuildCommand (scripts/prepare-sidecar.mjs, using TAURI_ENV_TARGET_TRIPLE).
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
