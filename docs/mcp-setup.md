@@ -63,6 +63,12 @@ claude mcp add ourshell -- "$HOME/.cargo/bin/ourshell-mcp"
 The MCP server and the desktop app must reach the same agent so that approvals
 show up in the app: leave `OURSHELL_AGENT_SOCKET` unset (the default) for both.
 
+As soon as Claude Code starts the MCP server, its session appears in the desktop
+app under **MCP & AI → AI Access** (and in `ourshell ai status`), before the AI
+has called any tool, so you can enable dangerous mode for it up front. Each
+Claude Code session gets a new session id; a session that `/mcp` reconnects is a
+new one, so dangerous mode has to be enabled again.
+
 ## Claude Desktop
 
 Add an entry to `claude_desktop_config.json` and restart Claude Desktop. The file
