@@ -18,7 +18,7 @@
     searchQuery,
     shareHostModal,
   } from "../../stores/ui";
-  import { openHostTab } from "../../stores/terminal";
+  import { openHostTab, openOrFocusHostTab } from "../../stores/terminal";
   import { activeWindowTab, focusTerminalTab, focusSftpTab } from "../../stores/windowTabs";
   import { openSftpTab } from "../../stores/sftp";
   import { rpc } from "../../rpc";
@@ -41,9 +41,14 @@
     if (n > 0) setTimeout(() => searchInput?.focus(), 30);
   });
 
+  /** Click / Enter: go to the host's open tab if there is one. */
   function connect(h: ItemRecord<Host>): void {
-    const id = openHostTab(h.id, h.item.name);
-    focusTerminalTab(id);
+    focusTerminalTab(openOrFocusHostTab(h.id, h.item.name));
+  }
+
+  /** Context menu: always start another session in a new tab. */
+  function connectNewTab(h: ItemRecord<Host>): void {
+    focusTerminalTab(openHostTab(h.id, h.item.name));
   }
 
   function openMenuAt(kind: "new", e: MouseEvent): void;
@@ -60,6 +65,10 @@
 
   function doConnect(): void {
     if (menu?.host) connect(menu.host);
+    menu = null;
+  }
+  function doConnectNewTab(): void {
+    if (menu?.host) connectNewTab(menu.host);
     menu = null;
   }
   function doSftp(): void {
@@ -335,6 +344,9 @@
   <Menu x={menu.x} y={menu.y} onClose={() => (menu = null)}>
     <button class="menu-item" on:click={doConnect}>
       <Icon name="terminal" /><span>{$t("hdr.connect")}</span><span class="kbd">Enter</span>
+    </button>
+    <button class="menu-item" on:click={doConnectNewTab}>
+      <Icon name="plus" /><span>{$t("c.newTab")}</span>
     </button>
     <button class="menu-item" on:click={doSftp}>
       <Icon name="folder" /><span>{$t("c.sftp")}</span>

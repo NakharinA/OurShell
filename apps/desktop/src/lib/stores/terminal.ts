@@ -45,6 +45,29 @@ function makeLeaf(hostId: string, hostName: string): LeafPane {
   return { type: "leaf", id: genId(), hostId, hostName };
 }
 
+/** Whether any pane in this tree is connected to `hostId`. */
+export function treeHasHost(root: PaneNode, hostId: string): boolean {
+  if (root.type === "leaf") return root.hostId === hostId;
+  return root.children.some((c) => treeHasHost(c, hostId));
+}
+
+/**
+ * Switches to the first open tab that already has a session on `hostId`;
+ * opens a new tab only if there is none. Returns the tab id.
+ */
+export function openOrFocusHostTab(hostId: string, hostName: string): string {
+  let existing: TermTab | undefined;
+  tabs.update((list) => {
+    existing = list.find((t) => treeHasHost(t.root, hostId));
+    return list;
+  });
+  if (existing) {
+    activeTabId.set(existing.id);
+    return existing.id;
+  }
+  return openHostTab(hostId, hostName);
+}
+
 /** Opens a brand-new tab with a single pane connected to `hostId`. Returns its id. */
 export function openHostTab(hostId: string, hostName: string): string {
   const leaf = makeLeaf(hostId, hostName);
