@@ -3,7 +3,7 @@
 Tagging `vX.Y.Z` runs two workflows:
 
 - `.github/workflows/release.yml` builds the `ourshell` CLI and `ourshell-mcp` for Linux, Windows and macOS. It attaches the archives with SHA-256 checksums and a GitHub build-provenance attestation.
-- `.github/workflows/desktop-release.yml` builds the desktop installers (NSIS/MSI, universal DMG, deb/AppImage). It signs them, writes the updater manifest `latest.json`, and creates a **draft** release for you to review and publish.
+- `.github/workflows/desktop-release.yml` builds the desktop installers for Windows x64 (NSIS/MSI), Windows ARM64 (NSIS), macOS ARM64 (DMG), Linux x64 and Linux ARM64 (deb/rpm/AppImage). It signs them, writes the updater manifest `latest.json`, and creates a **draft** release for you to review and publish.
 
 Verify a downloaded artifact with `gh attestation verify <file> --repo NakharinA/OurShell`.
 
