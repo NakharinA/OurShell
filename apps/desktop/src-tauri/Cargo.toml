@@ -52,3 +52,10 @@ opt-level = "s"
 [features]
 # Enabled by the release workflow together with tauri.updater.conf.json.
 updater = ["dep:tauri-plugin-updater", "dep:tauri-plugin-process"]
+
+# Keep debug builds small (see the workspace Cargo.toml).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
