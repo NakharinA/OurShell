@@ -1,5 +1,6 @@
 <script lang="ts">
   import TerminalSession from "./TerminalSession.svelte";
+  import Icon from "../../icons/Icon.svelte";
   import { closePane, setActivePane, splitPane, type PaneNode } from "../../stores/terminal";
   import { hosts } from "../../stores/items";
 
@@ -114,9 +115,15 @@
     <div class="leaf-header">
       <span class="host-name">{node.hostName}</span>
       <span class="spacer"></span>
-      <button class="ghost" title="Split horizontally" on:click|stopPropagation={() => doSplit("row")}>⬓</button>
-      <button class="ghost" title="Split vertically" on:click|stopPropagation={() => doSplit("col")}>⬒</button>
-      <button class="ghost" title="Close pane" on:click|stopPropagation={doClose}>✕</button>
+      <button class="icon-btn sm" title="Split horizontally" on:click|stopPropagation={() => doSplit("row")}>
+        <Icon name="split-h" size="sm" />
+      </button>
+      <button class="icon-btn sm" title="Split vertically" on:click|stopPropagation={() => doSplit("col")}>
+        <Icon name="split-v" size="sm" />
+      </button>
+      <button class="icon-btn sm" title="Close pane" on:click|stopPropagation={doClose}>
+        <Icon name="x" size="sm" />
+      </button>
     </div>
     <div class="leaf-body">
       <TerminalSession paneId={node.id} hostId={node.hostId} hostName={node.hostName} />
@@ -159,7 +166,7 @@
     flex-direction: column;
     height: 100%;
     width: 100%;
-    border: 1px solid var(--panel-border);
+    border: 1px solid var(--border);
     box-sizing: border-box;
   }
   .leaf.active {
@@ -170,12 +177,12 @@
     align-items: center;
     gap: 2px;
     padding: 2px 6px;
-    background: var(--bg-elevated);
+    background: var(--bg-surface);
     font-size: 12px;
-    border-bottom: 1px solid var(--panel-border);
+    border-bottom: 1px solid var(--border);
   }
   .host-name {
-    color: var(--text-dim);
+    color: var(--text-2);
   }
   .spacer {
     flex: 1;
@@ -201,7 +208,7 @@
     overflow: hidden;
   }
   .divider {
-    background: var(--panel-border);
+    background: var(--border);
     flex: 0 0 auto;
   }
   .divider.row {
