@@ -69,6 +69,7 @@ import {
   type VaultStatus,
   type ImportReport,
   type KeyResult,
+  type TeamMember,
 } from "./types";
 
 // ----- base64 helpers (PTY bytes / file contents travel as base64 strings) -----
@@ -338,6 +339,9 @@ class AgentClient {
   }
   teamList(): Promise<TeamInfo[]> {
     return this.call(Method.TEAM_LIST);
+  }
+  teamMembers(team: string): Promise<TeamMember[]> {
+    return this.call(Method.TEAM_MEMBERS, { team });
   }
   teamAddMember(params: TeamMemberParams): Promise<void> {
     return this.call(Method.TEAM_ADD_MEMBER, params);

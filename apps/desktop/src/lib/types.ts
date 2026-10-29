@@ -96,6 +96,7 @@ export const Method = {
   TEAM_CREATE: "team.create",
   TEAM_LIST: "team.list",
   TEAM_ADD_MEMBER: "team.add_member",
+  TEAM_MEMBERS: "team.members",
   TEAM_REMOVE_MEMBER: "team.remove_member",
   TEAM_SHARE: "team.share",
   ORG_INVITE: "org.invite",
@@ -616,4 +617,12 @@ export interface OrgUserInfo {
 
 export interface OrgDisableUserParams {
   user_id: string;
+}
+
+/** A team vault member, from `team.members`. */
+export interface TeamMember {
+  user_id: string;
+  email: string;
+  enc_public: string;
+  sign_public: string;
 }

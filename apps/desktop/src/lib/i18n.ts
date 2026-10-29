@@ -46,6 +46,9 @@ const en: Dict = {
   "vault.addMember": "Add",
   "vault.removeMember": "Remove",
   "vault.removeMemberHint": "Removing a member rotates the vault key.",
+  "vault.memberList": "Members",
+  "vault.noMembers": "No members yet.",
+  "vault.addMemberPh": "Teammate's email",
   "vault.noTeams": "No team vaults yet.",
 
   "hdr.menu": "Toggle sidebar",
@@ -414,6 +417,9 @@ const th: Dict = {
   "vault.addMember": "เพิ่ม",
   "vault.removeMember": "นำออก",
   "vault.removeMemberHint": "การนำสมาชิกออกจะหมุนกุญแจของห้องนิรภัยใหม่",
+  "vault.memberList": "สมาชิก",
+  "vault.noMembers": "ยังไม่มีสมาชิก",
+  "vault.addMemberPh": "อีเมลของเพื่อนร่วมทีม",
   "vault.noTeams": "ยังไม่มีห้องนิรภัยทีม",
 
   "hdr.menu": "ย่อ/ขยายแถบเมนู",

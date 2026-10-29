@@ -13,7 +13,7 @@ use ourshell_core::vault::{Vault, VaultError};
 use ourshell_proto::agent::{
     event, method, AccountChangePasswordParams, AccountLoginParams, AccountSignupParams,
     AccountStatus, DeviceRef, OrgDisableUserParams, OrgInviteParams, OrgInviteResult, SyncParams,
-    SyncReport, TeamCreateParams, TeamInfo, TeamMemberParams, TeamShareParams, TeamShareResult,
+    SyncReport, TeamCreateParams, TeamInfo, TeamMemberParams, TeamRef, TeamShareParams, TeamShareResult,
     TotpCodeParams, VaultRecoverParams,
 };
 use ourshell_proto::rpc::{self, RpcError};
@@ -62,6 +62,10 @@ pub async fn dispatch(state: &Arc<State>, m: &str, params: Value) -> RpcResult {
         method::TEAM_ADD_MEMBER => {
             let p: TeamMemberParams = parse(params)?;
             team_add_member(state, p).await
+        }
+        method::TEAM_MEMBERS => {
+            let p: TeamRef = parse(params)?;
+            team_members(state, p).await
         }
         method::TEAM_REMOVE_MEMBER => {
             let p: TeamMemberParams = parse(params)?;
@@ -455,6 +459,21 @@ async fn team_list(state: &Arc<State>) -> RpcResult {
         .map(|v| team_info_of(&v))
         .collect::<Vec<_>>();
     to_value(teams)
+}
+
+async fn team_members(state: &Arc<State>, p: TeamRef) -> RpcResult {
+    let session = current_session(state).await?;
+    let vault_id = {
+        let slot = state.vault.lock().await;
+        match slot.vault.as_ref() {
+            Some(v) if v.is_unlocked() => resolve_team(v, &p.team)?,
+            _ => return Err(err(rpc::VAULT_LOCKED, "vault is locked")),
+        }
+    };
+    let members = sync::team_members(&session, &vault_id)
+        .await
+        .map_err(sync_err)?;
+    to_value(members)
 }
 
 async fn team_add_member(state: &Arc<State>, p: TeamMemberParams) -> RpcResult {
