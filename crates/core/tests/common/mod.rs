@@ -352,8 +352,9 @@ async fn run_fake_command(cmd: String, channel: ChannelId, handle: Handle) {
     if !stderr.is_empty() {
         let _ = handle.extended_data(channel, 1, stderr).await;
     }
-    let _ = handle.exit_status_request(channel, status).await;
+    // Same order as OpenSSH's sshd: EOF first, then exit-status, then close.
     let _ = handle.eof(channel).await;
+    let _ = handle.exit_status_request(channel, status).await;
     let _ = handle.close(channel).await;
 }
 

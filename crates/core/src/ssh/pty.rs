@@ -142,7 +142,9 @@ impl Session {
                             break;
                         }
                     }
-                    Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
+                    // EOF comes before exit-status from OpenSSH; only a close
+                    // (or the connection going away) ends the session.
+                    Some(ChannelMsg::Close) | None => {
                         let _ = tx.send(PtyEvent::Closed).await;
                         break;
                     }
