@@ -126,7 +126,9 @@ impl Session {
                     Some(ChannelMsg::ExitStatus { exit_status }) => {
                         out.exit_code = Some(exit_status);
                     }
-                    Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => break,
+                    // OpenSSH sends EOF *before* exit-status, so keep reading
+                    // until the channel actually closes.
+                    Some(ChannelMsg::Close) | None => break,
                     _ => {}
                 }
             }
