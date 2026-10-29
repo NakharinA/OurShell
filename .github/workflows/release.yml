@@ -245,7 +245,10 @@ jobs:
           HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         run: |
           bundle="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
-          files=$(find "$bundle" -name '*.sig' -print; find "$bundle" -name '*.app.tar.gz' -print)
+          # tauri-action already uploads the macOS update bundle (and its .sig) under an
+          # arch-qualified name (OurShell_aarch64.app.tar.gz); don't add a second copy.
+          files=$(find "$bundle" -name '*.sig' ! -name '*.app.tar.gz.sig' -print)
+          if [ "${{ runner.os }}" = "macOS" ]; then echo "macOS updater artifacts are uploaded by tauri-action"; exit 0; fi
           echo "$files"
           if [ -z "$files" ]; then echo "no updater artifacts found" >&2; exit 1; fi
           gh release upload "${{ github.ref_name }}" $files --clobber
