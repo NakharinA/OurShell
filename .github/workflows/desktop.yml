@@ -67,10 +67,6 @@ jobs:
       - name: vitest
         run: npm run test
 
-      - name: cargo clippy (src-tauri)
-        working-directory: apps/desktop/src-tauri
-        run: cargo clippy --all-targets -- -D warnings
-
       # The agent binary (`ourshell agent`) is built by the root workspace and
       # copied in as the Tauri sidecar; see apps/desktop/README.md.
       - name: Build the ourshell CLI/agent binary
@@ -79,6 +75,11 @@ jobs:
 
       - name: Copy sidecar binary
         run: node scripts/copy-sidecar.mjs --release
+
+      # tauri-build checks that the sidecar exists, so this must run after the copy.
+      - name: cargo clippy (src-tauri)
+        working-directory: apps/desktop/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Build the desktop app bundle
         run: npx tauri build --bundles ${{ runner.os == 'Linux' && 'deb,appimage' || runner.os == 'macOS' && 'dmg' || 'nsis,msi' }}
