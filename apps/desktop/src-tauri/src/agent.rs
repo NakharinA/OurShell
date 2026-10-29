@@ -261,24 +261,42 @@ async fn handshake(
     };
     let params = serde_json::to_value(params).map_err(io::Error::other)?;
     write_request(stream, &Request::new(0, method::HELLO, params)).await?;
+    expect_ok(reader, 0, "hello").await?;
 
+    // The agent only broadcasts events (approval requests, vault lock, AI
+    // mode changes) to connections that subscribe; per-session PTY output
+    // arrives either way.
+    write_request(
+        stream,
+        &Request::new(0, method::EVENTS_SUBSCRIBE, serde_json::json!({})),
+    )
+    .await?;
+    expect_ok(reader, 0, "events.subscribe").await
+}
+
+/// Reads one handshake reply and checks it is a success for `id`.
+async fn expect_ok(
+    reader: &mut BufReader<&LocalSocketStream>,
+    id: u64,
+    what: &str,
+) -> io::Result<()> {
     let mut line = String::new();
     let n = reader.read_line(&mut line).await?;
     if n == 0 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
-            "agent closed the connection during hello",
+            format!("agent closed the connection during {what}"),
         ));
     }
     let msg: ServerMessage = serde_json::from_str(line.trim_end()).map_err(io::Error::other)?;
     match msg {
-        ServerMessage::Response(resp) if resp.id == 0 => {
+        ServerMessage::Response(resp) if resp.id == id => {
             if let Some(err) = resp.error {
-                return Err(io::Error::other(err.to_string()));
+                return Err(io::Error::other(format!("{what}: {err}")));
             }
             Ok(())
         }
-        _ => Err(io::Error::other("unexpected reply to hello")),
+        _ => Err(io::Error::other(format!("unexpected reply to {what}"))),
     }
 }
 
