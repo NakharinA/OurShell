@@ -89,6 +89,6 @@ console.log(`  git commit -m "chore: bump version to ${version}"`);
 console.log(`  git tag -a v${version} -m "OurShell v${version}"`);
 console.log("  git push --follow-tags");
 console.log(
-  "\nPushing the tag triggers release.yml (CLI/MCP) and desktop-release.yml (desktop app), which both",
+  "\nPushing the tag triggers .github/workflows/release.yml, which builds the CLI, MCP server and",
 );
-console.log("publish into the same draft GitHub release. Review it, then publish to go live.");
+console.log("desktop app into one draft GitHub release. Review it, then publish to go live.");
