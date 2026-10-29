@@ -8,8 +8,11 @@
 
   let ready = false;
   let startupError = "";
+  // The UI talks to the agent through Tauri; a plain browser tab can't.
+  const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
   onMount(async () => {
+    if (!inTauri) return;
     await startEventBus();
     await pollStatus();
   });
@@ -29,7 +32,14 @@
   }
 </script>
 
-{#if !ready}
+{#if !inTauri}
+  <div class="loading">
+    <p class="text-dim">
+      This page only works inside the OurShell desktop window.<br />
+      Run <code>npm run tauri dev</code> in <code>apps/desktop</code> instead of opening it in a browser.
+    </p>
+  </div>
+{:else if !ready}
   <div class="loading">
     <p class="text-dim">{startupError || "Loading…"}</p>
   </div>
