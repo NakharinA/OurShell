@@ -138,10 +138,10 @@ impl russh::server::Handler for ConnHandler {
     async fn auth_publickey(
         &mut self,
         _user: &str,
-        public_key: &russh::keys::ssh_key::PublicKey,
+        key: russh::server::VerifiedPublicKey<'_>,
     ) -> Result<Auth, Self::Error> {
         match &self.accepted_client_key {
-            Some(k) if k == public_key => Ok(Auth::Accept),
+            Some(k) if k == key.public_key => Ok(Auth::Accept),
             _ => Ok(Auth::reject()),
         }
     }

@@ -23,7 +23,7 @@ getrandom = "0.4.3"
 hkdf = "0.13.0"
 ourshell-proto.workspace = true
 rusqlite = { version = "0.40.2", features = ["bundled"] }
-russh = { version = "0.63.1", default-features = false, features = ["flate2", "ring", "rsa"] }
+russh = { version = "0.65", default-features = false, features = ["flate2", "ring", "rsa"] }
 russh-sftp = "3.0.1"
 serde.workspace = true
 serde_json.workspace = true
