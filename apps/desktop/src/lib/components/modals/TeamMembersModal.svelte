@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { confirmDialog } from "../../stores/confirm";
   import Modal from "../ui/Modal.svelte";
   import Icon from "../../icons/Icon.svelte";
   import { t } from "../../i18n";
@@ -56,7 +57,12 @@
 
   async function remove(memberEmail: string): Promise<void> {
     if (!vaultId) return;
-    if (!confirm(`${$t("vault.removeMember")} ${memberEmail}? ${$t("vault.removeMemberHint")}`)) return;
+    const ok = await confirmDialog({
+      title: `${$t("vault.removeMember")} ${memberEmail}?`,
+      message: $t("vault.removeMemberHint"),
+      confirmLabel: $t("vault.removeMember"),
+    });
+    if (!ok) return;
     busy = true;
     error = "";
     try {
