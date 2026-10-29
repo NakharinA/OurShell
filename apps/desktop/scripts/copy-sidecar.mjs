@@ -7,6 +7,8 @@
 // Usage:
 //   node scripts/copy-sidecar.mjs            # copies target/debug build
 //   node scripts/copy-sidecar.mjs --release  # copies target/release build
+//   node scripts/copy-sidecar.mjs --release --target aarch64-pc-windows-msvc
+//                                            # copies target/<triple>/release (cross build)
 //
 // Run this after `cargo build [--release] -p ourshell` and before
 // `npm run tauri dev` / `npx tauri build`, since Tauri needs the sidecar file to
@@ -24,7 +26,8 @@ const desktopDir = join(scriptDir, "..");
 
 const release = process.argv.includes("--release");
 const profile = release ? "release" : "debug";
-const exe = process.platform === "win32" ? ".exe" : "";
+const targetArg = process.argv.indexOf("--target");
+const requestedTarget = targetArg >= 0 ? process.argv[targetArg + 1] : undefined;
 
 function hostTriple() {
   const out = execFileSync("rustc", ["-vV"], { encoding: "utf8" });
@@ -36,12 +39,18 @@ function hostTriple() {
 }
 
 function main() {
-  const triple = hostTriple();
-  const src = join(repoRoot, "target", profile, `ourshell${exe}`);
+  const host = hostTriple();
+  const triple = requestedTarget || host;
+  const exe = triple.includes("windows") ? ".exe" : "";
+  // `cargo build --target X` writes to target/X/<profile>, even when X is the host.
+  const src = requestedTarget
+    ? join(repoRoot, "target", triple, profile, `ourshell${exe}`)
+    : join(repoRoot, "target", profile, `ourshell${exe}`);
   if (!existsSync(src)) {
     console.error(
       `error: ${src} does not exist.\n` +
-        `Build it first, e.g.: cargo build ${release ? "--release " : ""}-p ourshell`
+        `Build it first, e.g.: cargo build ${release ? "--release " : ""}` +
+        `${requestedTarget ? `--target ${requestedTarget} ` : ""}-p ourshell`
     );
     process.exit(1);
   }
@@ -50,7 +59,7 @@ function main() {
   mkdirSync(binariesDir, { recursive: true });
   const dest = join(binariesDir, `ourshell-${triple}${exe}`);
   copyFileSync(src, dest);
-  if (process.platform !== "win32") {
+  if (!triple.includes("windows")) {
     chmodSync(dest, 0o755);
   }
   console.log(`copied ${src} -> ${dest}`);
