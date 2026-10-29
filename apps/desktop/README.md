@@ -135,3 +135,8 @@ assumptions" in the implementation notes / PR description for the full list):
   returning the stored `ItemRecord`.
 - `ai.status`'s `pending` must match what already went out as
   `approval.request` events (the UI reconciles both).
+
+> **Note:** the agent keeps running after you close the app, by design. On Windows a running
+> `.exe` can't be overwritten, so `npm run tauri dev` / `tauri build` first run
+> `scripts/stop-agent.mjs`, which asks any running agent to shut down (this locks the vault).
+> If you still see `Access is denied` from `tauri-build`, run `ourshell vault stop-agent`.
