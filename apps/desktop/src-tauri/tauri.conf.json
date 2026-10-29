@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "node scripts/stop-agent.mjs && npm run dev",
-    "beforeBuildCommand": "node scripts/stop-agent.mjs && npm run build"
+    "beforeDevCommand": "node scripts/prepare-sidecar.mjs && npm run dev",
+    "beforeBuildCommand": "node scripts/prepare-sidecar.mjs --release && npm run build"
   },
   "app": {
     "windows": [
