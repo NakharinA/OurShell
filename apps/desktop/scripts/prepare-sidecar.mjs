@@ -8,10 +8,14 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const release = process.argv.includes("--release");
+// Tauri sets this for before*Command hooks (e.g. `tauri build --target aarch64-pc-windows-msvc`),
+// so the agent is built for the same architecture as the app bundle.
+const target = process.env.TAURI_ENV_TARGET_TRIPLE || "";
+const targetArgs = target ? ["--target", target] : [];
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { stdio: "inherit", ...opts });
 
 run(process.execPath, [join(here, "stop-agent.mjs")]);
-run("cargo", ["build", "-p", "ourshell", ...(release ? ["--release"] : [])], {
+run("cargo", ["build", "-p", "ourshell", ...(release ? ["--release"] : []), ...targetArgs], {
   cwd: join(here, "..", "..", ".."),
 });
-run(process.execPath, [join(here, "copy-sidecar.mjs"), ...(release ? ["--release"] : [])]);
+run(process.execPath, [join(here, "copy-sidecar.mjs"), ...(release ? ["--release"] : []), ...targetArgs]);

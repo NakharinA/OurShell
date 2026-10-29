@@ -1,13 +1,20 @@
 name: Desktop release
 
-# Signed installers + updater manifest for tagged releases.
+# Builds the desktop app for every supported platform on a version tag and
+# attaches the installers to a draft GitHub release.
 #
-# Required repository secrets (see docs/release-signing.md):
-#   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   updater signatures (all OSes)
+#   Windows x64     x86_64-pc-windows-msvc      NSIS + MSI
+#   Windows ARM64   aarch64-pc-windows-msvc     NSIS (cross-compiled on x64)
+#   macOS ARM64     aarch64-apple-darwin        DMG
+#   Linux x64       x86_64-unknown-linux-gnu    deb + rpm + AppImage
+#   Linux ARM64     aarch64-unknown-linux-gnu   deb + rpm + AppImage
+#
+# Optional repository secrets (see docs/release-signing.md):
+#   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   enables signed auto-update
 #   WINDOWS_CERTIFICATE (base64 .pfx), WINDOWS_CERTIFICATE_PASSWORD Authenticode
 #   APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD,
 #   APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID  codesign + notarization
-# Missing Windows/Apple secrets produce unsigned (but updater-signed) bundles.
+# Without them the bundles are built unsigned and without the updater.
 
 on:
   push:
@@ -21,18 +28,32 @@ permissions:
 
 jobs:
   bundle:
-    name: ${{ matrix.platform }}
-    runs-on: ${{ matrix.platform }}
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: windows-latest
-            args: ""
-          - platform: macos-latest
-            args: "--target universal-apple-darwin"
-          - platform: ubuntu-22.04
-            args: ""
+          - name: windows-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - name: windows-arm64
+            runner: windows-latest
+            target: aarch64-pc-windows-msvc
+            bundles: nsis
+          - name: macos-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            bundles: dmg
+          - name: linux-x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,rpm,appimage
+          - name: linux-arm64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: deb,rpm,appimage
     steps:
       - uses: actions/checkout@v4
 
@@ -42,30 +63,28 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> target
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev \
-            libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev \
+            pkg-config rpm
 
-      - name: Build the agent sidecar
-        shell: bash
-        run: |
-          if [ "${{ runner.os }}" = "macOS" ]; then
-            cargo build --release -p ourshell --target aarch64-apple-darwin
-            cargo build --release -p ourshell --target x86_64-apple-darwin
-            mkdir -p apps/desktop/src-tauri/binaries
-            lipo -create -output apps/desktop/src-tauri/binaries/ourshell-universal-apple-darwin \
-              target/aarch64-apple-darwin/release/ourshell target/x86_64-apple-darwin/release/ourshell
-            cp target/aarch64-apple-darwin/release/ourshell apps/desktop/src-tauri/binaries/ourshell-aarch64-apple-darwin
-            cp target/x86_64-apple-darwin/release/ourshell apps/desktop/src-tauri/binaries/ourshell-x86_64-apple-darwin
-          else
-            cargo build --release -p ourshell
-            node apps/desktop/scripts/copy-sidecar.mjs --release
-          fi
+      # `ring` needs clang to cross-compile its assembly for Windows ARM64.
+      - name: Put LLVM on PATH (Windows ARM64 cross build)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Import Windows code-signing certificate
         if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
@@ -89,6 +108,8 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      # The agent sidecar is built for the same target by the app's
+      # beforeBuildCommand (scripts/prepare-sidecar.mjs, using TAURI_ENV_TARGET_TRIPLE).
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -105,15 +126,18 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: OurShell ${{ github.ref_name }}
           releaseDraft: true
-          includeUpdaterJson: true
-          args: ${{ matrix.args }} --features updater --config src-tauri/tauri.updater.conf.json
+          includeUpdaterJson: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          args: >-
+            --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+            ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && '--features updater --config src-tauri/tauri.updater.conf.json' || '' }}
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            apps/desktop/src-tauri/target/**/release/bundle/**/*.exe
-            apps/desktop/src-tauri/target/**/release/bundle/**/*.msi
-            apps/desktop/src-tauri/target/**/release/bundle/**/*.dmg
-            apps/desktop/src-tauri/target/**/release/bundle/**/*.deb
-            apps/desktop/src-tauri/target/**/release/bundle/**/*.AppImage
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
