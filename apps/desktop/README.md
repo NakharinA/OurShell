@@ -138,5 +138,6 @@ assumptions" in the implementation notes / PR description for the full list):
 
 > **Note:** the agent keeps running after you close the app, by design. On Windows a running
 > `.exe` can't be overwritten, so `npm run tauri dev` / `tauri build` first run
-> `scripts/stop-agent.mjs`, which asks any running agent to shut down (this locks the vault).
+> `scripts/prepare-sidecar.mjs`, which stops any running agent (this locks the vault), rebuilds
+> the `ourshell` agent and copies it in as the sidecar, so the app never runs a stale agent.
 > If you still see `Access is denied` from `tauri-build`, run `ourshell vault stop-agent`.
