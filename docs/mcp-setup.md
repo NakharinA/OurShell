@@ -151,6 +151,13 @@ They can never show you configuration or secret *contents*: `configmaps` may be 
 `describe` would print the object's data in full. Kubernetes `secret`s are not reachable
 through any of these tools, in any case or spelling.
 
+One caveat: `k8s_describe` on pods, deployments and similar kinds prints environment
+variables that are set inline in the spec, and `k8s_logs` prints whatever the application
+logs. Output goes through secret redaction (values under secret-sounding names, URL
+passwords, private keys and known token formats are masked), but a secret stored under an
+innocent-looking variable name could still be shown. Keep secrets in Kubernetes `Secret`s
+(referenced via `secretKeyRef`, which `describe` does not expand), not in literal env values.
+
 By default these tools still pause for your approval, exactly like every other tool. If you
 want them to run immediately for a specific host -- say, so an AI assistant can check pod
 status or tail logs without interrupting you every time -- turn on **Allow read-only AI tools
