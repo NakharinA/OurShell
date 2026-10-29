@@ -2,6 +2,7 @@
      the scenes as an Identity (see ../../identity.ts) - this UI never shows
      the word "Identity". -->
 <script lang="ts">
+  import { confirmDialog } from "../../stores/confirm";
   import Modal from "../ui/Modal.svelte";
   import Icon from "../../icons/Icon.svelte";
   import Menu from "../ui/Menu.svelte";
@@ -181,7 +182,7 @@
   async function remove(): Promise<void> {
     headerMenuOpen = false;
     if (!record) return;
-    if (!confirm(`${$t("a.remove")} "${record.item.name}"?`)) return;
+    if (!(await confirmDialog({ title: `${$t("a.remove")} "${record.item.name}"?` }))) return;
     busy = true;
     try {
       await rpc.itemDelete({ kind: "host", id: record.id });

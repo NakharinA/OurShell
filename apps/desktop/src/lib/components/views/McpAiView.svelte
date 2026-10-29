@@ -2,6 +2,7 @@
      AI Access / Activity tabs - no external MCP server management, no
      "Allowed actions" toggles without a backend, no "never ask" option). -->
 <script lang="ts">
+  import { confirmDialog } from "../../stores/confirm";
   import { onMount } from "svelte";
   import Icon from "../../icons/Icon.svelte";
   import Menu from "../ui/Menu.svelte";
@@ -87,7 +88,12 @@
   }
 
   async function stopAll(): Promise<void> {
-    if (!confirm($t("ai.stopAllConfirm"))) return;
+    const ok = await confirmDialog({
+      title: $t("ai.stopAll"),
+      message: $t("ai.stopAllConfirm"),
+      confirmLabel: $t("ai.stopAll"),
+    });
+    if (!ok) return;
     busy = true;
     try {
       await rpc.aiStop();

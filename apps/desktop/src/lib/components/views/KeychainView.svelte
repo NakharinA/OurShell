@@ -1,5 +1,6 @@
 <!-- Keychain (design `data-view="keychain"`). -->
 <script lang="ts">
+  import { confirmDialog } from "../../stores/confirm";
   import Icon from "../../icons/Icon.svelte";
   import Menu from "../ui/Menu.svelte";
   import { t } from "../../i18n";
@@ -31,7 +32,7 @@
 
   async function remove(k: ItemRecord<SshKey>): Promise<void> {
     menu = null;
-    if (!confirm(`${$t("a.remove")} "${k.item.name}"?`)) return;
+    if (!(await confirmDialog({ title: `${$t("a.remove")} "${k.item.name}"?` }))) return;
     try {
       await rpc.itemDelete({ kind: "key", id: k.id });
       await refreshKeys();

@@ -1,5 +1,6 @@
 <!-- Snippets (design `data-view="snippets"`). -->
 <script lang="ts">
+  import { confirmDialog } from "../../stores/confirm";
   import Icon from "../../icons/Icon.svelte";
   import Menu from "../ui/Menu.svelte";
   import { t } from "../../i18n";
@@ -35,7 +36,7 @@
 
   async function remove(rec: ItemRecord<Snippet>): Promise<void> {
     menu = null;
-    if (!confirm(`${$t("a.remove")} "${rec.item.name}"?`)) return;
+    if (!(await confirmDialog({ title: `${$t("a.remove")} "${rec.item.name}"?` }))) return;
     try {
       await rpc.itemDelete({ kind: "snippet", id: rec.id });
       await refreshSnippets();

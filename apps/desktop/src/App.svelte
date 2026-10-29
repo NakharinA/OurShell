@@ -17,6 +17,7 @@
   import IconSprite from "./lib/icons/IconSprite.svelte";
   import UpdateBanner from "./lib/components/UpdateBanner.svelte";
   import { startAiWatcher } from "./lib/stores/ai";
+  import ConfirmDialog from "./lib/components/ui/ConfirmDialog.svelte";
 
   let ready = false;
   let startupError = "";
@@ -82,6 +83,7 @@
 {/if}
 
 <Toasts />
+<ConfirmDialog />
 
 <style>
   .loading {

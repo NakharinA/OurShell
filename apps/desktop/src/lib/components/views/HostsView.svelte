@@ -1,6 +1,7 @@
 <!-- Hosts (design `data-view="hosts"`): quick-connect search, group browsing,
      host cards with hover/context actions. -->
 <script lang="ts">
+  import { confirmDialog } from "../../stores/confirm";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { readFile } from "@tauri-apps/plugin-fs";
   import Icon from "../../icons/Icon.svelte";
@@ -111,7 +112,7 @@
   }
   async function doRemove(h: ItemRecord<Host>): Promise<void> {
     menu = null;
-    if (!confirm(`${$t("a.remove")} "${h.item.name}"?`)) return;
+    if (!(await confirmDialog({ title: `${$t("a.remove")} "${h.item.name}"?` }))) return;
     try {
       await rpc.itemDelete({ kind: "host", id: h.id });
       await refreshHosts();
