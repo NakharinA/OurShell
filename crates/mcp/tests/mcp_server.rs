@@ -67,6 +67,20 @@ fn fake_response(req: &Request) -> Response {
             req.id,
             RpcError::new(rpc::APPROVAL_REJECTED, "user said no"),
         ),
+        method::AI_K8S_GET
+        | method::AI_K8S_DESCRIBE
+        | method::AI_K8S_LOGS
+        | method::AI_K8S_EVENTS
+        | method::AI_SYSTEM_STATUS => Response::ok(
+            req.id,
+            serde_json::to_value(ExecResult {
+                stdout: format!("ok: {}\n", req.method),
+                stderr: String::new(),
+                exit_code: Some(0),
+                truncated: false,
+            })
+            .unwrap(),
+        ),
         other => Response::err(
             req.id,
             RpcError::new(rpc::METHOD_NOT_FOUND, format!("unexpected method {other}")),
@@ -216,11 +230,16 @@ async fn lists_tools_and_forwards_calls_to_the_agent() {
     assert_eq!(
         names,
         vec![
+            "k8s_describe",
+            "k8s_events",
+            "k8s_get",
+            "k8s_logs",
             "list_dir",
             "list_hosts",
             "read_file",
             "run_command",
-            "write_file"
+            "system_status",
+            "write_file",
         ]
     );
     for tool in tools {
@@ -283,11 +302,35 @@ async fn lists_tools_and_forwards_calls_to_the_agent() {
     assert_eq!(resp["result"]["isError"], false);
     assert_eq!(tool_text(&resp), "hi");
 
-    // --- tools/call: write_file -> the fake agent rejects it (-32004) ---
+    // --- tools/call: k8s_get ---
     send(
         &mut stdin,
         call_tool(
             7,
+            "k8s_get",
+            json!({"host": "web", "kind": "pods", "namespace": "default"}),
+        ),
+    )
+    .await;
+    let resp = recv(&mut reader).await;
+    assert_eq!(resp["result"]["isError"], false);
+    assert!(tool_text(&resp).contains("ai.k8s_get"));
+
+    // --- tools/call: system_status (no arguments) ---
+    send(
+        &mut stdin,
+        call_tool(8, "system_status", json!({"host": "web"})),
+    )
+    .await;
+    let resp = recv(&mut reader).await;
+    assert_eq!(resp["result"]["isError"], false);
+    assert!(tool_text(&resp).contains("ai.system_status"));
+
+    // --- tools/call: write_file -> the fake agent rejects it (-32004) ---
+    send(
+        &mut stdin,
+        call_tool(
+            9,
             "write_file",
             json!({"host": "web", "path": "/tmp/file.txt", "content": "data"}),
         ),

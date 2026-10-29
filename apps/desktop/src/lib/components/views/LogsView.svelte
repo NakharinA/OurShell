@@ -84,7 +84,7 @@
               <td class="mono">{e.tool}</td>
               <td>{e.host}</td>
               <td class="mono" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{e.detail}</td>
-              <td>{e.mode === "dangerous" ? $t("mode.dangerous") : $t("mode.normal")}</td>
+              <td>{e.mode === "dangerous" ? $t("mode.dangerous") : e.mode === "auto-readonly" ? $t("mode.autoReadonly") : $t("mode.normal")}</td>
               <td>
                 <span class="badge {e.outcome === 'approved' || e.outcome === 'allowed' ? 'ok' : e.outcome === 'denied' ? 'err' : 'warn'}">
                   {e.outcome}

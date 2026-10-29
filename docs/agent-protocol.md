@@ -32,9 +32,36 @@ The agent replies with its protocol version and rejects a different major versio
 | `sftp.list` / `sftp.read` / `sftp.write` | File access |
 | `forward.open` / `forward.list` / `forward.close` | Port forwards |
 | `ai.hosts` / `ai.run` / `ai.list_dir` / `ai.read_file` / `ai.write_file` | AI-facing calls, checked against the policy |
+| `ai.k8s_get` / `ai.k8s_describe` / `ai.k8s_logs` / `ai.k8s_events` / `ai.system_status` | Typed, read-only AI calls: the agent builds the remote `kubectl`/status command itself from validated arguments (see "Typed read-only AI tools" below), never from client text |
 | `ai.approvals` / `ai.decide` | Pending approvals and the user's decision |
 | `ai.dangerous` / `ai.stop` / `ai.audit` | Dangerous-mode toggle, kill switch, audit log |
 | `events.subscribe` | Receive `vault.locked`, `approval.request` and `ai.mode` events |
+
+## Typed read-only AI tools
+
+`ai.k8s_get`, `ai.k8s_describe`, `ai.k8s_logs`, `ai.k8s_events` and `ai.system_status` never
+carry a command: the AI passes a handful of strictly validated parameters (`host`, `kind`,
+`namespace`, `name`, ...) and the agent assembles the exact remote command itself --
+`kubectl get <kind> -n <namespace> [name] -o wide`, `kubectl describe <kind> <name> -n
+<namespace>`, `kubectl logs <pod> -n <namespace> [-c <container>] --tail=<N> [--since=<D>]`,
+`kubectl get events -n <namespace> --sort-by=.lastTimestamp`, or the fixed `uptime; df -h;
+free -m`. There is no way to pass a raw command, an output-format flag, or anything else
+through these methods.
+
+`kind` is one of a fixed allowlist with aliases (`po`/`pod`/`pods`, `deploy`/`deployment`/
+`deployments`, `sts`, `ds`, `rs`, `svc`/`service`, `ing`/`ingress`, `no`/`node`, `ns`/
+`namespace`, `job`, `cj`/`cronjob`, `pvc`, `pv`, `ev`/`event`, `ep`/`endpoint`, `cm`/
+`configmap`); anything else -- including every spelling of `secret`/`secrets` -- is rejected.
+`configmaps` may be listed by `ai.k8s_get` (name/age only) but never described by
+`ai.k8s_describe`, since `describe` prints the object's data in full. Names, namespaces, pods
+and containers must be valid Kubernetes DNS names; `tail` is capped at 500; `since` is capped
+at 7 days. A bad parameter fails with `-32602` (invalid params) before any connection is made.
+
+These methods still go through the same host (`ai_allowed`), dangerous-mode and kill-switch
+checks as every other `ai.*` call, are audited and redacted the same way, and use the same
+`for_ai` SSH path (so `ai_user` still applies). The one difference: a host can separately opt
+in (`ai_readonly_auto`) to skipping the human-approval wait for *just these tools* -- see
+`docs/mcp-setup.md`.
 
 ## Errors
 

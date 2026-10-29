@@ -44,8 +44,9 @@ widens this set.
 claude mcp add ourshell -- ourshell-mcp
 ```
 
-Claude Code will launch `ourshell-mcp` over stdio and discover the five tools
-(`list_hosts`, `run_command`, `list_dir`, `read_file`, `write_file`) automatically.
+Claude Code will launch `ourshell-mcp` over stdio and discover the ten tools
+(`list_hosts`, `run_command`, `list_dir`, `read_file`, `write_file`, `k8s_get`,
+`k8s_describe`, `k8s_logs`, `k8s_events`, `system_status`) automatically.
 
 If `/mcp` shows the server as failed (`CONNECTION_CLOSED`), Claude Code couldn't
 start `ourshell-mcp`; usually it isn't on the `PATH` Claude Code sees. Either
@@ -136,6 +137,43 @@ With no further setup, every tool call pauses until a human approves it:
 Each pending approval shows the AI session, the host, the tool, and a short detail
 (the command, or the path being read/written) so you can see exactly what you're
 approving before you do.
+
+## Read-only tools
+
+Five tools never run an AI-supplied command at all: `k8s_get`, `k8s_describe`, `k8s_logs`,
+`k8s_events` and `system_status`. For these, the AI only supplies a handful of strictly
+validated arguments (a resource kind, a namespace, a name, ...), and the agent -- not the AI
+-- builds the exact `kubectl`/status command from them. There is no way to pass a raw
+command, an output-format flag, or anything beyond those arguments.
+
+They can never show you configuration or secret *contents*: `configmaps` may be listed by
+`k8s_get` (name and age only), but `k8s_describe` refuses `configmaps` outright, because
+`describe` would print the object's data in full. Kubernetes `secret`s are not reachable
+through any of these tools, in any case or spelling.
+
+One caveat: `k8s_describe` on pods, deployments and similar kinds prints environment
+variables that are set inline in the spec, and `k8s_logs` prints whatever the application
+logs. Output goes through secret redaction (values under secret-sounding names, URL
+passwords, private keys and known token formats are masked), but a secret stored under an
+innocent-looking variable name could still be shown. Keep secrets in Kubernetes `Secret`s
+(referenced via `secretKeyRef`, which `describe` does not expand), not in literal env values.
+
+By default these tools still pause for your approval, exactly like every other tool. If you
+want them to run immediately for a specific host -- say, so an AI assistant can check pod
+status or tail logs without interrupting you every time -- turn on **Allow read-only AI tools
+without approval** for that host (in the host's **AI access** section in the desktop app, or
+`ourshell host edit <name> --ai-readonly-auto true` on the CLI). This switch:
+
+- Only affects `k8s_get`, `k8s_describe`, `k8s_logs`, `k8s_events` and `system_status`.
+  `run_command`, `list_dir`, `read_file` and `write_file` always pause for approval on that
+  host unless dangerous mode is on.
+- Requires the host to already be AI-allowed; it has no effect otherwise.
+- Still respects the kill switch and dangerous mode: `ourshell ai stop` blocks it like
+  everything else, and if dangerous mode is separately on for the session and host, that
+  takes priority (and shows as such in the audit log).
+- Shows up in `host ls` as `yes+ro` instead of `yes`, and audit entries made this way show
+  `auto-readonly` as the mode and `policy` as the approver, so you can always tell which calls
+  ran unattended.
 
 ## Dangerous mode
 

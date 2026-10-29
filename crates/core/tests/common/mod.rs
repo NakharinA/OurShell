@@ -327,6 +327,10 @@ impl russh::server::Handler for ConnHandler {
 /// - `exit N` exits with status `N`, no output
 /// - `stderr-msg` prints to stderr and exits 1
 /// - `big` prints 64 KiB of `A` to stdout, for truncation tests
+/// - a command starting with `kubectl` echoes it back as `ok: <cmd>`, so a
+///   test can assert on the exact command the agent built
+/// - a command starting with `uptime` (the fixed `system_status` command)
+///   prints canned `uptime`/`df`/`free`-shaped output
 /// - anything else prints "unknown command" to stderr and exits 127
 async fn run_fake_command(cmd: String, channel: ChannelId, handle: Handle) {
     let (status, stdout, stderr): (u32, Vec<u8>, Vec<u8>) =
@@ -338,6 +342,19 @@ async fn run_fake_command(cmd: String, channel: ChannelId, handle: Handle) {
             (1, Vec::new(), b"stderr message\n".to_vec())
         } else if cmd == "big" {
             (0, vec![b'A'; 64 * 1024], Vec::new())
+        } else if cmd.starts_with("kubectl") {
+            (0, format!("ok: {cmd}\n").into_bytes(), Vec::new())
+        } else if cmd.starts_with("uptime") {
+            (
+                0,
+                b" 12:00:00 up 1 day,  2:34,  1 user,  load average: 0.01, 0.02, 0.03\n\
+                   Filesystem      Size  Used Avail Use% Mounted on\n\
+                   /dev/sda1        20G   5G   15G  25% /\n\
+                   total        used        free\n\
+                   Mem:          2048         512        1536\n"
+                    .to_vec(),
+                Vec::new(),
+            )
         } else {
             (
                 127,

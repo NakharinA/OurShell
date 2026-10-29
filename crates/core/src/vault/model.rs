@@ -26,6 +26,12 @@ pub struct Host {
     pub ai_allowed: bool,
     /// Optional user override for AI-initiated sessions (e.g. a restricted `ai` user).
     pub ai_user: Option<String>,
+    /// Allow the typed read-only AI tools (`k8s_get`, `k8s_describe`, `k8s_logs`,
+    /// `k8s_events`, `system_status`) to run on this host without per-call human
+    /// approval. Everything else (dangerous mode, the kill switch, `ai_allowed`
+    /// itself) still applies; this only skips the approval wait for *those* tools.
+    #[serde(default)]
+    pub ai_readonly_auto: bool,
     pub notes: Option<String>,
     /// Forward the local SSH agent to this host.
     #[serde(default)]

@@ -5,6 +5,7 @@
 
 mod ai;
 mod items;
+mod k8s;
 pub mod policy;
 pub mod redact;
 pub mod ssh_ops;
