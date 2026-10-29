@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo/ourshell.svg" width="96" height="96" alt="OurShell logo"></p>
+
 # OurShell
 
 [![CI](https://github.com/NakharinA/OurShell/actions/workflows/ci.yml/badge.svg)](https://github.com/NakharinA/OurShell/actions/workflows/ci.yml)
