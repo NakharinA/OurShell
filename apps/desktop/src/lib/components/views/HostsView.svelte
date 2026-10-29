@@ -19,7 +19,7 @@
     shareHostModal,
   } from "../../stores/ui";
   import { openHostTab } from "../../stores/terminal";
-  import { focusTerminalTab, focusSftpTab } from "../../stores/windowTabs";
+  import { activeWindowTab, focusTerminalTab, focusSftpTab } from "../../stores/windowTabs";
   import { openSftpTab } from "../../stores/sftp";
   import { rpc } from "../../rpc";
   import { toast, errorText } from "../../stores/toast";
@@ -182,7 +182,20 @@
 
   let focusedHost: ItemRecord<Host> | null = null;
 
+  /** Typing targets (inputs, terminals) keep their keys; shortcuts are for the host list. */
+  function isTypingTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    return (
+      target.isContentEditable ||
+      ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
+      target.closest(".xterm") !== null
+    );
+  }
+
   function keydown(e: KeyboardEvent): void {
+    // Shortcuts only apply on the Vaults tab; in a terminal tab Ctrl+N, Ctrl+E
+    // and Delete belong to the remote shell.
+    if ($activeWindowTab.type !== "vaults" || isTypingTarget(e.target)) return;
     if (menu) {
       if (e.key === "Escape") menu = null;
       return;
