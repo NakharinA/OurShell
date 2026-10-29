@@ -69,6 +69,9 @@ impl Sftp {
             .await
             .map_err(sftp_err)?;
         file.write_all(bytes).await.map_err(SshError::Io)?;
+        // Wait for the server to acknowledge every write before closing, so a
+        // failed write (disk full, permissions) is reported instead of lost.
+        file.flush().await.map_err(SshError::Io)?;
         file.close().await.map_err(sftp_err)
     }
 
