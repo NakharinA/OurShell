@@ -30,6 +30,22 @@ uuid = { version = "1.26.1", features = ["v4"] }
 regex = "1.13.1"
 sha2 = "0.11.0"
 futures = "0.3.34"
+# `ourshell update` (crates/cli/src/update.rs). Same `rustls-tls` choice as
+# ourshell-core's sync client (see crates/core/Cargo.toml) -- the `ring`
+# crypto provider, never `aws-lc-sys`. `stream` lets the download be written
+# to disk incrementally instead of buffered fully in memory.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "stream",
+] }
+semver = "1"
+# Archive formats the release workflow produces: .zip on Windows, .tar.gz elsewhere.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = "1"
+self-replace = "1"
+tempfile = "3.27.0"
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
@@ -37,7 +53,6 @@ predicates = "3.1.4"
 rand = "0.10"
 russh = { version = "0.63.1", default-features = false, features = ["flate2", "ring", "rsa"] }
 russh-sftp = "3.0.1"
-tempfile = "3.27.0"
 tokio = { workspace = true, features = ["full"] }
 
 [target."cfg(windows)".dependencies]

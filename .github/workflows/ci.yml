@@ -25,6 +25,13 @@ jobs:
       - name: Install Linux deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Linux'
+        with:
+          node-version: 22
+      - name: Check version consistency
+        if: runner.os == 'Linux'
+        run: node scripts/check-version.mjs
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace

@@ -14,6 +14,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use ourshell::agent::{self, AgentOptions};
 use ourshell::client::{hello, AgentClient};
+use ourshell::update;
 use ourshell_core::vault::Vault;
 use ourshell_proto::agent::{
     method, AccountChangePasswordParams, AccountStatus, ClientKind, SyncParams, SyncReport,
@@ -99,6 +100,19 @@ pub enum Command {
         /// Keep running even when idle and locked.
         #[arg(long)]
         no_idle_exit: bool,
+    },
+    /// Check for, download and install the latest `ourshell` release from
+    /// GitHub (https://github.com/NakharinA/OurShell/releases). Updates
+    /// never come from anywhere else.
+    Update {
+        /// Only report whether an update is available; install nothing.
+        /// Exits with code 10 if a newer release exists (handy for scripts),
+        /// 0 otherwise.
+        #[arg(long)]
+        check: bool,
+        /// Install without the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -224,6 +238,17 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Forward(cmd) => ssh::forward(cmd, cli.json).await,
         Command::Key(cmd) => ssh::key(cmd, cli.json).await,
         Command::Import(cmd) => ssh::import(cmd, cli.json).await,
+        Command::Update { check, yes } => {
+            if check {
+                let available = update::run_check(cli.json).await?;
+                if available {
+                    std::process::exit(update::EXIT_UPDATE_AVAILABLE);
+                }
+                Ok(())
+            } else {
+                update::run_update(yes).await
+            }
+        }
     }
 }
 

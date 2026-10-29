@@ -1,5 +1,20 @@
 name: Release
 
+# One workflow, one draft release per version tag:
+#   check-version -> create-release -> cli (5 targets) + desktop (5 targets) -> updater-manifest
+# The draft is created once up front and every job uploads into it, so parallel
+# jobs can never create duplicate drafts. latest.json (the desktop auto-update
+# manifest) is generated once at the end from the signed installers.
+#
+#   Windows x64     x86_64-pc-windows-msvc      CLI zip, NSIS + MSI
+#   Windows ARM64   aarch64-pc-windows-msvc     CLI zip, NSIS (cross-compiled on x64)
+#   macOS ARM64     aarch64-apple-darwin        CLI tar.gz, DMG (+ .app.tar.gz for updates)
+#   Linux x64       x86_64-unknown-linux-gnu    CLI tar.gz, deb + rpm + AppImage
+#   Linux ARM64     aarch64-unknown-linux-gnu   CLI tar.gz, deb + rpm + AppImage
+#
+# Secrets (see docs/release-signing.md): TAURI_SIGNING_PRIVATE_KEY(+_PASSWORD)
+# enables signed auto-update; WINDOWS_CERTIFICATE* and APPLE_* enable OS code signing.
+
 on:
   push:
     tags: ["v*"]
@@ -13,17 +28,47 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: ${{ matrix.target }}
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-version.mjs --tag "${{ github.ref_name }}"
+
+  create-release:
+    needs: check-version
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.draft.outputs.id }}
+    steps:
+      - id: draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          id=$(gh api "repos/$REPO/releases" --paginate --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)
+          if [ -z "$id" ]; then
+            id=$(gh api "repos/$REPO/releases" -X POST -f tag_name="$TAG" -f name="OurShell $TAG" \
+                   -F draft=true -f body="Release notes for $TAG." --jq .id)
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  cli:
+    name: cli-${{ matrix.target }}
+    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, ext: "" }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: ".exe" }
-          - { os: macos-latest, target: aarch64-apple-darwin, ext: "" }
-          - { os: macos-13, target: x86_64-apple-darwin, ext: "" }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: ".exe", archive: zip }
+          - { os: windows-latest, target: aarch64-pc-windows-msvc, ext: ".exe", archive: zip }
+          - { os: macos-latest, target: aarch64-apple-darwin, ext: "", archive: tar.gz }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, ext: "", archive: tar.gz }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, ext: "", archive: tar.gz }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -32,34 +77,193 @@ jobs:
       - name: Install Linux deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      # `ring` needs clang to cross-compile its assembly for Windows ARM64.
+      - name: Put LLVM on PATH (Windows ARM64 cross build)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p ourshell -p ourshell-mcp
-      - name: Package
+      # Asset names must match what `ourshell update` looks for (crates/cli/src/update.rs).
+      - name: Package and checksum
         shell: bash
         run: |
-          name=ourshell-${{ github.ref_name }}-${{ matrix.target }}
+          name="ourshell-${{ github.ref_name }}-${{ matrix.target }}"
+          archive="$name.${{ matrix.archive }}"
           mkdir -p "dist/$name"
-          cp target/${{ matrix.target }}/release/ourshell${{ matrix.ext }} "dist/$name/"
-          cp target/${{ matrix.target }}/release/ourshell-mcp${{ matrix.ext }} "dist/$name/"
+          cp "target/${{ matrix.target }}/release/ourshell${{ matrix.ext }}" "dist/$name/"
+          cp "target/${{ matrix.target }}/release/ourshell-mcp${{ matrix.ext }}" "dist/$name/"
           cp LICENSE README.md "dist/$name/"
           cd dist
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            7z a "$name.zip" "$name" > /dev/null
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "$archive" "$name" > /dev/null
           else
-            tar czf "$name.tar.gz" "$name"
+            tar czf "$archive" "$name"
           fi
-      - name: Checksums
+          if command -v sha256sum > /dev/null; then sha256sum "$archive"; else shasum -a 256 "$archive"; fi \
+            > "SHA256SUMS-${{ matrix.target }}.txt"
+          cat "SHA256SUMS-${{ matrix.target }}.txt"
+          echo "ARCHIVE=dist/$archive" >> "$GITHUB_ENV"
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+      - name: Upload to the draft release
         shell: bash
-        run: cd dist && (sha256sum ourshell-* 2>/dev/null || shasum -a 256 ourshell-*) | grep -v '/$' > SHA256SUMS-${{ matrix.target }}.txt || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "$ARCHIVE" "dist/SHA256SUMS-${{ matrix.target }}.txt" --clobber
+
+  desktop:
+    name: desktop-${{ matrix.name }}
+    needs: create-release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - name: windows-arm64
+            runner: windows-latest
+            target: aarch64-pc-windows-msvc
+            bundles: nsis
+          - name: macos-arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - name: linux-x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,rpm,appimage
+          - name: linux-arm64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: deb,rpm,appimage
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+          workspaces: |
+            . -> target
+            apps/desktop/src-tauri -> target
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev \
+            pkg-config rpm
+
+      # `ring` needs clang to cross-compile its assembly for Windows ARM64.
+      - name: Put LLVM on PATH (Windows ARM64 cross build)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Import Windows code-signing certificate
+        if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        shell: pwsh
+        run: |
+          $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          [IO.File]::WriteAllBytes("cert.pfx", $bytes)
+          $pw = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath cert.pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+          Remove-Item cert.pfx
+          $conf = Get-Content apps/desktop/src-tauri/tauri.conf.json | ConvertFrom-Json
+          $conf.bundle | Add-Member -NotePropertyName windows -NotePropertyValue @{
+            certificateThumbprint = $cert.Thumbprint; digestAlgorithm = "sha256";
+            timestampUrl = "http://timestamp.digicert.com" } -Force
+          $conf | ConvertTo-Json -Depth 20 | Set-Content apps/desktop/src-tauri/tauri.conf.json
+
+      - name: npm ci
+        working-directory: apps/desktop
+        run: npm ci
+
+      # The agent sidecar is built for the same target by the app's
+      # beforeBuildCommand (scripts/prepare-sidecar.mjs, using TAURI_ENV_TARGET_TRIPLE).
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: apps/desktop
+          releaseId: ${{ needs.create-release.outputs.id }}
+          # latest.json is generated once by the updater-manifest job.
+          includeUpdaterJson: false
+          args: >-
+            --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+            ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && '--features updater --config src-tauri/tauri.updater.conf.json' || '' }}
+
+      # Upload the updater artifacts and their signatures explicitly; the
+      # updater-manifest job builds latest.json from these.
+      - name: Upload updater artifacts and signatures
+        if: env.HAS_UPDATER_KEY == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          bundle="apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          files=$(find "$bundle" -name '*.sig' -print; find "$bundle" -name '*.app.tar.gz' -print)
+          echo "$files"
+          if [ -z "$files" ]; then echo "no updater artifacts found" >&2; exit 1; fi
+          gh release upload "${{ github.ref_name }}" $files --clobber
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: |
-            dist/*.zip
-            dist/*.tar.gz
-      - uses: softprops/action-gh-release@v2
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.rpm
+            apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+
+  updater-manifest:
+    needs: [create-release, desktop]
+    if: always() && needs.create-release.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          files: |
-            dist/*.zip
-            dist/*.tar.gz
-            dist/SHA256SUMS-*.txt
+          node-version: 22
+      - name: Build and upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ "$HAS_UPDATER_KEY" != "true" ]; then
+            echo "No updater signing key configured; skipping latest.json."
+            exit 0
+          fi
+          mkdir sigs
+          gh release download "$TAG" --pattern '*.sig' --dir sigs
+          node scripts/make-latest-json.mjs "$TAG" sigs "See the release notes for $TAG."
+          gh release upload "$TAG" latest.json --clobber
