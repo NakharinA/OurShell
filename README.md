@@ -1,5 +1,8 @@
 # OurShell
 
+[![CI](https://github.com/NakharinA/OurShell/actions/workflows/ci.yml/badge.svg)](https://github.com/NakharinA/OurShell/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A self-hostable, open-source, Termius-style SSH client written in Rust. It includes a CLI, a desktop app (Tauri 2), an MCP server that lets AI run commands on hosts you approve, and a zero-knowledge sync server.
 
 Secrets are always encrypted on the client before they reach the server. See [the project plan](Open-Source%20SSH%20Client%20—%20Project%20Plan.md) and [`docs/`](docs/).
@@ -35,6 +38,10 @@ ourshell vault lock
 The CLI starts a local agent (`ourshell agent`) on demand. It holds the unlocked
 vault, auto-locks after 15 idle minutes, and exits when idle and locked. The
 desktop app and the MCP server talk to the same agent.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Please report security problems privately, as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
