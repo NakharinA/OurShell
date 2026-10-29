@@ -233,7 +233,9 @@ async fn run(state: &Arc<State>, conn: &Arc<Conn>, p: ExecParams) -> RpcResult {
         .max_output
         .unwrap_or(DEFAULT_MAX_OUTPUT)
         .min(DEFAULT_MAX_OUTPUT * 16);
-    let res = ssh_ops::exec(state, &g.host_id, true, &p.command, p.timeout_secs, max).await;
+    // Fetch a little more than the cap: redact the whole thing, then cut.
+    let fetch = max + policy::REDACTION_SLACK;
+    let res = ssh_ops::exec(state, &g.host_id, true, &p.command, p.timeout_secs, fetch).await;
     match res {
         Ok(r) => {
             audit(
@@ -300,7 +302,14 @@ async fn read_file(state: &Arc<State>, conn: &Arc<Conn>, p: SftpPathParams) -> R
         .max_bytes
         .unwrap_or(DEFAULT_MAX_OUTPUT)
         .min(DEFAULT_MAX_OUTPUT * 16);
-    let res = ssh_ops::sftp_read(state, &g.host_id, true, &p.path, max).await;
+    let res = ssh_ops::sftp_read(
+        state,
+        &g.host_id,
+        true,
+        &p.path,
+        max + policy::REDACTION_SLACK,
+    )
+    .await;
     let outcome = if res.is_ok() { "ok" } else { "error" };
     audit(
         state,
@@ -315,10 +324,18 @@ async fn read_file(state: &Arc<State>, conn: &Arc<Conn>, p: SftpPathParams) -> R
     )
     .await;
     let mut f: FileData = res?;
-    if let Ok(text) = std::str::from_utf8(&f.data) {
-        let red = policy::redact(text);
-        if red != text {
+    match std::str::from_utf8(&f.data) {
+        Ok(text) => {
+            let (red, cut) = policy::cap(policy::redact(text), max);
             f.data = red.into_bytes();
+            f.truncated |= cut;
+        }
+        Err(_) => {
+            // Binary: nothing to redact, just enforce the cap.
+            if f.data.len() > max {
+                f.data.truncate(max);
+                f.truncated = true;
+            }
         }
     }
     to_value(f)

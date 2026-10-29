@@ -6,6 +6,7 @@
 mod ai;
 mod items;
 pub mod policy;
+pub mod redact;
 pub mod ssh_ops;
 mod sync_ops;
 
