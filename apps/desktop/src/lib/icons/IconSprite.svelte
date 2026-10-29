@@ -80,5 +80,5 @@
 <symbol id="i-home" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6"><path d="M4 11.5 12 4l8 7.5" opacity=".8"/><path d="M6 10v8a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-8" opacity=".5"/></g></symbol>
 <symbol id="i-sparkle" viewBox="0 0 24 24"><g fill="currentColor"><path d="M12 2l1.8 5.2L19 9l-5.2 1.8L12 16l-1.8-5.2L5 9l5.2-1.8L12 2Z" opacity=".9"/></g></symbol>
 <symbol id="i-eye" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6"><path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z" opacity=".5"/><circle cx="12" cy="12" r="3"/></g></symbol>
-<symbol id="i-logo" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="currentColor"/><path d="m9 11 5 5-5 5M16 22h7" stroke="#fff" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-logo" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#f97316"/><path d="m9 11 5 5-5 5M16 22h7" stroke="#18181b" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
 </defs></svg>
