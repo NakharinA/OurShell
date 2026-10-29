@@ -478,7 +478,10 @@ impl russh_sftp::server::Handler for TestSftpHandler {
     }
 
     async fn close(&mut self, id: u32, handle: String) -> Result<Status, Self::Error> {
-        self.files.remove(&handle);
+        if let Some(mut file) = self.files.remove(&handle) {
+            use tokio::io::AsyncWriteExt;
+            let _ = file.flush().await;
+        }
         self.dirs.remove(&handle);
         Ok(ok_status(id))
     }
@@ -537,6 +540,9 @@ impl russh_sftp::server::Handler for TestSftpHandler {
         file.write_all(&data)
             .await
             .map_err(|_| StatusCode::Failure)?;
+        // tokio::fs writes on a background thread; flush so the data is on
+        // disk before we acknowledge (tests read the file right after).
+        file.flush().await.map_err(|_| StatusCode::Failure)?;
         Ok(ok_status(id))
     }
 

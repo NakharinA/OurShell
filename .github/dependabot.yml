@@ -4,6 +4,17 @@ updates:
     directory: /
     schedule: { interval: weekly }
     open-pull-requests-limit: 5
+    ignore:
+      # The OPAQUE code (crates/proto, server) must use the versions opaque-ke 4.0
+      # depends on; bumping them breaks the build. Revisit when opaque-ke moves on.
+      - dependency-name: argon2
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: rand
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: rand_core
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: sha2
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: cargo
     directory: /apps/desktop/src-tauri
     schedule: { interval: weekly }
@@ -12,6 +23,10 @@ updates:
     directory: /apps/desktop
     schedule: { interval: weekly }
     open-pull-requests-limit: 5
+    ignore:
+      # svelte-check doesn't support TypeScript 7 yet.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
