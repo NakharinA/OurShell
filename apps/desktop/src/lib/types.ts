@@ -96,6 +96,7 @@ export const Method = {
   TEAM_CREATE: "team.create",
   TEAM_LIST: "team.list",
   TEAM_ADD_MEMBER: "team.add_member",
+  TEAM_MEMBERS: "team.members",
   TEAM_REMOVE_MEMBER: "team.remove_member",
   TEAM_SHARE: "team.share",
   ORG_INVITE: "org.invite",
@@ -200,6 +201,12 @@ export interface Host {
   ai_allowed: boolean;
   ai_user: string | null;
   notes: string | null;
+  /** Forward the local SSH agent to this host. */
+  agent_forwarding: boolean;
+  /** Desktop terminal color theme name (e.g. "Midnight", "Solar"). */
+  terminal_theme: string | null;
+  /** Terminal font size in px. */
+  font_size: number | null;
 }
 
 export interface Identity {
@@ -257,6 +264,9 @@ export function emptyHost(): Host {
     ai_allowed: false,
     ai_user: null,
     notes: null,
+    agent_forwarding: false,
+    terminal_theme: null,
+    font_size: null,
   };
 }
 
@@ -607,4 +617,12 @@ export interface OrgUserInfo {
 
 export interface OrgDisableUserParams {
   user_id: string;
+}
+
+/** A team vault member, from `team.members`. */
+export interface TeamMember {
+  user_id: string;
+  email: string;
+  enc_public: string;
+  sign_public: string;
 }

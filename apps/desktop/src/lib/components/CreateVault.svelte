@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Icon from "../icons/Icon.svelte";
+  import { t } from "../i18n";
   import { rpc } from "../rpc";
   import { refreshVaultStatus } from "../stores/vault";
   import { autofocus } from "../actions/autofocus";
@@ -34,7 +36,6 @@
   async function finish(): Promise<void> {
     busy = true;
     try {
-      // vault.init may or may not leave the vault unlocked; make sure it is.
       try {
         await rpc.vaultUnlock({ password });
       } catch {
@@ -45,56 +46,62 @@
       busy = false;
     }
   }
+
+  function copyPhrase(): void {
+    void navigator.clipboard.writeText(recoveryPhrase);
+  }
 </script>
 
 <div class="screen">
   {#if step === "form"}
-    <form class="panel card" on:submit|preventDefault={createVault}>
-      <h1>Create your vault</h1>
-      <p class="text-dim">
-        This password encrypts everything locally. OurShell never sends it anywhere.
-      </p>
-      <label>
-        Master password
-        <input type="password" bind:value={password} use:autofocus />
+    <form class="card panel auth-card" on:submit|preventDefault={createVault}>
+      <div class="brand" style="justify-content:center;padding:0 0 4px">
+        <Icon name="logo" />
+        <span>OurShell</span>
+      </div>
+      <h1 style="text-align:center;font-size:18px">{$t("create.title")}</h1>
+      <p class="hint" style="text-align:center">{$t("create.sub")}</p>
+      <div class="field">
+        <label for="create-pass">{$t("create.password")}</label>
+        <div class="input"><Icon name="pass" /><input id="create-pass" type="password" bind:value={password} use:autofocus /></div>
+      </div>
+      <div class="field">
+        <label for="create-confirm">{$t("create.confirm")}</label>
+        <div class="input"><Icon name="pass" /><input id="create-confirm" type="password" bind:value={confirm} /></div>
+      </div>
+      {#if mismatch}<p class="error-text">{$t("create.mismatch")}</p>{/if}
+      <label class="toggle-row">
+        <input type="checkbox" bind:checked={localOnly} style="width:16px;height:16px" />
+        <span class="grow">{$t("create.localOnly")}</span>
       </label>
-      <label>
-        Confirm password
-        <input type="password" bind:value={confirm} />
-      </label>
-      {#if mismatch}
-        <p class="error">Passwords do not match.</p>
-      {/if}
-      <label class="checkbox">
-        <input type="checkbox" bind:checked={localOnly} />
-        Local-only vault (never syncs to a server)
-      </label>
-      <p class="warning">
-        If you lose this password <strong>and</strong> the recovery phrase you're about to see,
-        your data cannot be recovered. There is no "forgot password" option.
-      </p>
-      {#if error}
-        <p class="error">{error}</p>
-      {/if}
-      <button class="primary" type="submit" disabled={busy || !password || mismatch}>
-        {busy ? "Creating…" : "Create vault"}
+      <div class="alert">
+        <Icon name="warn" />
+        <span>{$t("create.warning")}</span>
+      </div>
+      {#if error}<p class="error-text">{error}</p>{/if}
+      <button class="btn btn-primary btn-block" type="submit" disabled={busy || !password || mismatch}>
+        {busy ? $t("create.creating") : $t("create.submit")}
       </button>
     </form>
   {:else}
-    <div class="panel card recovery">
-      <h1>Save your recovery phrase</h1>
-      <p class="warning">
-        Write this down and store it somewhere safe (not in the vault itself). It is the
-        <strong>only</strong> way back in if you forget your master password. OurShell will
-        not show it again.
-      </p>
-      <pre class="phrase">{recoveryPhrase}</pre>
-      <label class="checkbox">
-        <input type="checkbox" bind:checked={savedConfirmed} />
-        I saved my recovery phrase somewhere safe
+    <div class="card panel auth-card">
+      <h1 style="text-align:center;font-size:18px">{$t("create.recoveryTitle")}</h1>
+      <div class="alert">
+        <Icon name="warn" />
+        <span>{$t("create.recoveryWarning")}</span>
+      </div>
+      <div class="code-wrap">
+        <pre class="code" style="user-select:all">{recoveryPhrase}</pre>
+        <button class="btn btn-soft btn-sm copy-btn" on:click={copyPhrase}>
+          <Icon name="copy" /><span>{$t("a.copy")}</span>
+        </button>
+      </div>
+      <label class="toggle-row">
+        <input type="checkbox" bind:checked={savedConfirmed} style="width:16px;height:16px" />
+        <span class="grow">{$t("create.recoverySaved")}</span>
       </label>
-      <button class="primary" disabled={!savedConfirmed || busy} on:click={finish}>
-        {busy ? "Opening…" : "Continue"}
+      <button class="btn btn-primary btn-block" disabled={!savedConfirmed || busy} on:click={finish}>
+        {busy ? $t("create.opening") : $t("create.continue")}
       </button>
     </div>
   {/if}
@@ -107,39 +114,13 @@
     align-items: center;
     justify-content: center;
     padding: 20px;
+    background: var(--bg-page);
   }
-  .card {
+  .auth-card {
     width: 440px;
     padding: 28px;
     display: flex;
     flex-direction: column;
     gap: 14px;
-  }
-  .checkbox {
-    flex-direction: row;
-    align-items: center;
-    gap: 8px;
-  }
-  .error {
-    color: var(--danger);
-    font-size: 13px;
-  }
-  .warning {
-    color: var(--warning);
-    font-size: 13px;
-    background: rgba(245, 158, 11, 0.1);
-    border: 1px solid var(--warning);
-    border-radius: var(--radius);
-    padding: 10px;
-  }
-  .phrase {
-    font-family: var(--mono);
-    background: var(--bg-sunken);
-    border: 1px solid var(--panel-border);
-    border-radius: var(--radius);
-    padding: 14px;
-    white-space: pre-wrap;
-    word-break: break-word;
-    user-select: all;
   }
 </style>

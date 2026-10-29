@@ -740,6 +740,18 @@ async fn session_user_id(client: &SyncClient, session: &SyncSession) -> Result<S
 /// regardless of how it's used, which would make this `async fn`'s
 /// future non-`Send` and unusable from `tokio::spawn` (see the agent's
 /// per-request task); `&mut Vault` has no such problem.
+/// Lists the members of a team vault, as the server knows them.
+pub async fn team_members(
+    session: &SyncSession,
+    vault_id: &str,
+) -> Result<Vec<ourshell_proto::sync::VaultMemberInfo>> {
+    let client = SyncClient::new(session.server_url.clone());
+    Ok(client
+        .vault_members(&session.session_token, vault_id)
+        .await?
+        .members)
+}
+
 pub async fn team_add_member(
     vault: &mut Vault,
     session: &SyncSession,

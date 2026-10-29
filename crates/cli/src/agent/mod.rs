@@ -476,7 +476,12 @@ pub async fn dispatch(
         m if m.starts_with("item.") || m.starts_with("key.") || m.starts_with("import.") => {
             items::dispatch(state, m, params).await
         }
-        m if m.starts_with("account.") || m.starts_with("sync.") || m == method::VAULT_RECOVER => {
+        m if m.starts_with("account.")
+            || m.starts_with("sync.")
+            || m.starts_with("team.")
+            || m.starts_with("org.")
+            || m == method::VAULT_RECOVER =>
+        {
             sync_ops::dispatch(state, m, params).await
         }
         _ => Err(err(

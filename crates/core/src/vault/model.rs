@@ -27,6 +27,16 @@ pub struct Host {
     /// Optional user override for AI-initiated sessions (e.g. a restricted `ai` user).
     pub ai_user: Option<String>,
     pub notes: Option<String>,
+    /// Forward the local SSH agent to this host.
+    #[serde(default)]
+    pub agent_forwarding: bool,
+    /// Name of a desktop terminal color theme (e.g. "Midnight", "Solar"); the
+    /// desktop UI owns the palette, this is just the saved choice.
+    #[serde(default)]
+    pub terminal_theme: Option<String>,
+    /// Terminal font size in px.
+    #[serde(default)]
+    pub font_size: Option<u16>,
 }
 
 impl Host {

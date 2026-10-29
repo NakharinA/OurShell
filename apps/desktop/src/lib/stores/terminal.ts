@@ -3,6 +3,7 @@
 // however many `pty.open` sessions the user has open at once.
 
 import { writable } from "svelte/store";
+import { nextTabOrder } from "./tabOrder";
 
 export type Orientation = "row" | "col";
 
@@ -29,6 +30,8 @@ export interface TermTab {
   title: string;
   root: PaneNode;
   activePaneId: string;
+  /** Insertion order, shared with SFTP tabs, so the titlebar can interleave them. */
+  order: number;
 }
 
 export const tabs = writable<TermTab[]>([]);
@@ -42,17 +45,19 @@ function makeLeaf(hostId: string, hostName: string): LeafPane {
   return { type: "leaf", id: genId(), hostId, hostName };
 }
 
-/** Opens a brand-new tab with a single pane connected to `hostId`. */
-export function openHostTab(hostId: string, hostName: string): void {
+/** Opens a brand-new tab with a single pane connected to `hostId`. Returns its id. */
+export function openHostTab(hostId: string, hostName: string): string {
   const leaf = makeLeaf(hostId, hostName);
   const tab: TermTab = {
     id: genId(),
     title: hostName,
     root: leaf,
     activePaneId: leaf.id,
+    order: nextTabOrder(),
   };
   tabs.update((list) => [...list, tab]);
   activeTabId.set(tab.id);
+  return tab.id;
 }
 
 function findNode(root: PaneNode, id: string): PaneNode | null {
@@ -64,6 +69,13 @@ function findNode(root: PaneNode, id: string): PaneNode | null {
     }
   }
   return null;
+}
+
+/** Finds a leaf pane by id (e.g. the tab's `activePaneId`), for the terminal
+ * overlay's split/SFTP/snippet/disconnect actions. */
+export function findLeaf(root: PaneNode, id: string): LeafPane | null {
+  const node = findNode(root, id);
+  return node && node.type === "leaf" ? node : null;
 }
 
 function replaceNode(root: PaneNode, id: string, replacement: PaneNode): PaneNode {
@@ -175,4 +187,31 @@ export function runSnippetInPane(paneId: string, script: string): boolean {
   const text = script.endsWith("\n") ? script : `${script}\n`;
   writer(text);
   return true;
+}
+
+/**
+ * Like `runSnippetInPane`, but retries for up to `timeoutMs` - useful right
+ * after `openHostTab`, where the PTY session is still connecting and the
+ * pane's writer isn't registered yet.
+ */
+export function runSnippetInPaneWhenReady(
+  paneId: string,
+  script: string,
+  timeoutMs = 10000,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = (): void => {
+      if (runSnippetInPane(paneId, script)) {
+        resolve(true);
+        return;
+      }
+      if (Date.now() - start >= timeoutMs) {
+        resolve(false);
+        return;
+      }
+      setTimeout(tick, 250);
+    };
+    tick();
+  });
 }

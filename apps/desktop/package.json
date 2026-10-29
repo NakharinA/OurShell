@@ -23,6 +23,9 @@
     "vitest": "^5.0.5"
   },
   "dependencies": {
+    "@fontsource/jetbrains-mono": "^5.2.6",
+    "@fontsource/noto-sans-thai": "^5.2.7",
+    "@fontsource/plus-jakarta-sans": "^5.2.7",
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-clipboard-manager": "^2.5.0",
     "@tauri-apps/plugin-dialog": "^2.8.4",

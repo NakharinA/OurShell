@@ -60,6 +60,7 @@ pub mod method {
     pub const TEAM_LIST: &str = "team.list";
     pub const TEAM_ADD_MEMBER: &str = "team.add_member";
     pub const TEAM_REMOVE_MEMBER: &str = "team.remove_member";
+    pub const TEAM_MEMBERS: &str = "team.members";
     pub const TEAM_SHARE: &str = "team.share";
     pub const ORG_INVITE: &str = "org.invite";
     pub const ORG_USERS: &str = "org.users";
@@ -493,6 +494,13 @@ pub struct TeamInfo {
     /// "personal" or "team".
     pub kind: String,
     pub role: String,
+}
+
+/// `team.members`: lists a team vault's members (result: `Vec<sync::VaultMemberInfo>`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeamRef {
+    /// Team vault id or name.
+    pub team: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

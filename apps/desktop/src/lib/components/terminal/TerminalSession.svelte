@@ -9,12 +9,20 @@
   import type { PtyDataEvent, PtyExitEvent } from "../../types";
   import { onAgentEvent } from "../../stores/events";
   import { EventMethod } from "../../types";
-  import { getTerminalTheme, terminalThemeId } from "../../stores/theme";
+  import { getTerminalTheme, terminalThemeId, themeIdForName } from "../../stores/theme";
   import { registerPaneWriter, unregisterPaneWriter } from "../../stores/terminal";
+  import { hosts } from "../../stores/items";
+  import Modal from "../ui/Modal.svelte";
+  import Icon from "../../icons/Icon.svelte";
+  import { t, format } from "../../i18n";
 
   export let paneId: string;
   export let hostId: string;
   export let hostName: string;
+
+  $: hostRecord = $hosts.find((h) => h.id === hostId);
+  $: effectiveThemeId = themeIdForName(hostRecord?.item.terminal_theme) ?? $terminalThemeId;
+  $: effectiveFontSize = hostRecord?.item.font_size ?? 13;
 
   let container: HTMLDivElement;
   let term: Terminal;
@@ -82,9 +90,9 @@
   onMount(() => {
     term = new Terminal({
       fontFamily: "var(--mono)",
-      fontSize: 13,
+      fontSize: effectiveFontSize,
       cursorBlink: true,
-      theme: getTerminalTheme($terminalThemeId),
+      theme: getTerminalTheme(effectiveThemeId),
       scrollback: 5000,
     });
     fitAddon = new FitAddon();
@@ -135,12 +143,20 @@
         term.write(`\r\n\x1b[33m[process exited${ev.exit_code != null ? ` (${ev.exit_code})` : ""}]\x1b[0m\r\n`);
       }
     });
-    unsubTheme = terminalThemeId.subscribe((id) => {
-      term.options.theme = getTerminalTheme(id);
+    unsubTheme = terminalThemeId.subscribe(() => {
+      term.options.theme = getTerminalTheme(effectiveThemeId);
     });
 
     void open();
   });
+
+  // Host-specific theme/font size (set in the host modal) override the
+  // global default; re-apply live if either changes.
+  $: if (term) {
+    term.options.theme = getTerminalTheme(effectiveThemeId);
+    term.options.fontSize = effectiveFontSize;
+    fitAddon?.fit();
+  }
 
   onDestroy(() => {
     unsubData?.();
@@ -157,58 +173,43 @@
 
 <div class="pane-wrap">
   <div class="term-container" bind:this={container}></div>
-  {#if hostKeyPrompt}
-    <div class="hostkey-overlay">
-      {#if hostKeyPrompt.mismatch}
-        <p class="danger-text">
-          The host key for <strong>{hostName}</strong> does not match what was trusted before.
-          This can mean the server was reinstalled, or that something is intercepting the
-          connection. OurShell will not connect automatically.
-        </p>
-        <code>{hostKeyPrompt.fingerprint}</code>
-      {:else}
-        <p>
-          <strong>{hostName}</strong> presented a host key OurShell has not seen before.
-          Verify the fingerprint out-of-band before trusting it:
-        </p>
-        <code>{hostKeyPrompt.fingerprint}</code>
-        <div class="row">
-          <button class="primary" on:click={acceptHostKey}>Trust and connect</button>
-        </div>
-      {/if}
-    </div>
-  {/if}
 </div>
+
+{#if hostKeyPrompt}
+  <Modal
+    title={hostKeyPrompt.mismatch ? $t("term.hostkeyMismatch") : $t("term.hostkeyUnknown")}
+    onClose={() => (hostKeyPrompt = null)}
+  >
+    <div class="psec">
+      {#if hostKeyPrompt.mismatch}
+        <div class="alert" style="background:var(--danger-soft);color:var(--danger-text);align-items:flex-start">
+          <Icon name="warn" />
+          <span>{format($t("term.hostkeyMismatchBody"), { host: hostName })}</span>
+        </div>
+      {:else}
+        <p class="hint">{format($t("term.hostkeyUnknownBody"), { host: hostName })}</p>
+      {/if}
+      <pre class="code">{hostKeyPrompt.fingerprint}</pre>
+    </div>
+    <svelte:fragment slot="footer">
+      <button class="btn btn-ghost" on:click={() => (hostKeyPrompt = null)}>{$t("a.cancel")}</button>
+      {#if !hostKeyPrompt.mismatch}
+        <button class="btn btn-primary" on:click={acceptHostKey}>{$t("term.trust")}</button>
+      {/if}
+    </svelte:fragment>
+  </Modal>
+{/if}
 
 <style>
   .pane-wrap {
     position: relative;
     width: 100%;
     height: 100%;
-    background: var(--bg-sunken);
+    background: var(--bg-page);
   }
   .term-container {
     width: 100%;
     height: 100%;
     padding: 4px;
-  }
-  .hostkey-overlay {
-    position: absolute;
-    inset: 0;
-    background: var(--bg-elevated);
-    padding: 20px;
-    overflow: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .danger-text {
-    color: var(--danger);
-  }
-  code {
-    background: var(--bg-sunken);
-    padding: 6px;
-    border-radius: 4px;
-    word-break: break-all;
   }
 </style>
