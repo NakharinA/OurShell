@@ -175,12 +175,13 @@ jobs:
         run: echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Import Windows code-signing certificate
-        if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
+        if: runner.os == 'Windows'
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         shell: pwsh
         run: |
+          if (-not $env:WINDOWS_CERTIFICATE) { Write-Host "No Windows certificate; building unsigned."; exit 0 }
           $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
           [IO.File]::WriteAllBytes("cert.pfx", $bytes)
           $pw = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
@@ -191,6 +192,28 @@ jobs:
             certificateThumbprint = $cert.Thumbprint; digestAlgorithm = "sha256";
             timestampUrl = "http://timestamp.digicert.com" } -Force
           $conf | ConvertTo-Json -Depth 20 | Set-Content apps/desktop/src-tauri/tauri.conf.json
+
+      # Tauri tries to codesign whenever APPLE_CERTIFICATE is *set*, even to an
+      # empty string, so only export the Apple variables when the secrets exist.
+      - name: Apple code-signing environment
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then echo "No Apple certificate; building unsigned."; exit 0; fi
+          {
+            echo "APPLE_CERTIFICATE<<__EOF__"; echo "$APPLE_CERTIFICATE"; echo "__EOF__"
+            echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+            echo "APPLE_ID=$APPLE_ID"
+            echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+          } >> "$GITHUB_ENV"
 
       - name: npm ci
         working-directory: apps/desktop
@@ -203,12 +226,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: apps/desktop
           releaseId: ${{ needs.create-release.outputs.id }}
