@@ -3,7 +3,8 @@
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { WebLinksAddon } from "@xterm/addon-web-links";
-  import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
+  import { clipboardAction, copyText, pasteText } from "../../terminalClipboard";
+  import { toast } from "../../stores/toast";
   import { rpc } from "../../rpc";
   import { ErrorCode } from "../../types";
   import type { PtyDataEvent, PtyExitEvent } from "../../types";
@@ -87,6 +88,27 @@
     if (hostKeyPrompt) void open(hostKeyPrompt.fingerprint);
   }
 
+  async function copySelection(): Promise<void> {
+    const sel = term.getSelection();
+    if (!sel) return;
+    try {
+      await copyText(sel);
+      term.clearSelection();
+    } catch (err) {
+      toast.error(`Copy failed: ${String(err)}`);
+    }
+  }
+
+  async function pasteFromClipboard(): Promise<void> {
+    try {
+      const text = await pasteText();
+      // term.paste handles bracketed-paste mode and line endings, then emits onData.
+      if (text) term.paste(text);
+    } catch (err) {
+      toast.error(`Paste failed: ${String(err)}`);
+    }
+  }
+
   onMount(() => {
     term = new Terminal({
       fontFamily: "var(--mono)",
@@ -105,21 +127,27 @@
       if (status === "open") writeInput(data);
     });
 
-    // Copy on select.
+    // Copy on select (like PuTTY); Ctrl+C / right-click also copy explicitly.
     term.onSelectionChange(() => {
       const sel = term.getSelection();
-      if (sel) void writeText(sel);
+      if (sel) void copyText(sel).catch(() => {});
     });
 
-    // Paste via Ctrl+Shift+V.
     term.attachCustomKeyEventHandler((ev) => {
-      if (ev.type === "keydown" && ev.ctrlKey && ev.shiftKey && ev.key.toLowerCase() === "v") {
-        void readText().then((text) => {
-          if (text) writeInput(text);
-        });
-        return false;
-      }
-      return true;
+      const action = clipboardAction(ev, term.hasSelection());
+      if (!action) return true;
+      // Stop xterm sending ^C/^V and the browser's own paste, which would double it.
+      ev.preventDefault();
+      if (action === "copy") void copySelection();
+      else void pasteFromClipboard();
+      return false;
+    });
+
+    // Right-click: copy the selection, or paste when nothing is selected.
+    container.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      if (term.hasSelection()) void copySelection();
+      else void pasteFromClipboard();
     });
 
     resizeObserver = new ResizeObserver(() => {
