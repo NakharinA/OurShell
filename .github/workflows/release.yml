@@ -105,7 +105,7 @@ jobs:
           cat "SHA256SUMS-${{ matrix.target }}.txt"
           echo "ARCHIVE=dist/$archive" >> "$GITHUB_ENV"
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ env.ARCHIVE }}
       - name: Upload to the draft release
@@ -234,7 +234,7 @@ jobs:
           gh release upload "${{ github.ref_name }}" $files --clobber
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
