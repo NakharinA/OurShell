@@ -47,6 +47,22 @@ claude mcp add ourshell -- ourshell-mcp
 Claude Code will launch `ourshell-mcp` over stdio and discover the five tools
 (`list_hosts`, `run_command`, `list_dir`, `read_file`, `write_file`) automatically.
 
+If `/mcp` shows the server as failed (`CONNECTION_CLOSED`), Claude Code couldn't
+start `ourshell-mcp`; usually it isn't on the `PATH` Claude Code sees. Either
+install it (`cargo install --path crates/mcp`, which puts it in `~/.cargo/bin`)
+or register it with an absolute path:
+
+```sh
+# Windows (a dev build)
+claude mcp remove ourshell
+claude mcp add ourshell -- C:\path\to\Ourshell\target\debug\ourshell-mcp.exe
+# macOS / Linux
+claude mcp add ourshell -- "$HOME/.cargo/bin/ourshell-mcp"
+```
+
+The MCP server and the desktop app must reach the same agent so that approvals
+show up in the app: leave `OURSHELL_AGENT_SOCKET` unset (the default) for both.
+
 ## Claude Desktop
 
 Add an entry to `claude_desktop_config.json` and restart Claude Desktop. The file

@@ -11,7 +11,7 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { rpc } from "../rpc";
-import { onAgentEvent } from "./events";
+import { agentStatus, onAgentEvent } from "./events";
 import { EventMethod, type AiSessionInfo, type ApprovalRequest } from "../types";
 
 export const pendingApprovals = writable<ApprovalRequest[]>([]);
@@ -70,7 +70,9 @@ export function startAiWatcher(): void {
 
   onAgentEvent(EventMethod.APPROVAL_REQUEST, (params) => {
     const req = params as ApprovalRequest;
-    pendingApprovals.update((list) => [...list, req]);
+    pendingApprovals.update((list) =>
+      list.some((a) => a.approval_id === req.approval_id) ? list : [...list, req],
+    );
     void notifyApproval(req);
   });
 
@@ -81,6 +83,17 @@ export function startAiWatcher(): void {
 
   onAgentEvent(EventMethod.AI_MODE, () => {
     void refreshAiStatus();
+  });
+  onAgentEvent(EventMethod.VAULT_UNLOCKED, () => {
+    void refreshAiStatus();
+  });
+
+  // Events sent while the bridge was disconnected (agent restart, app reload)
+  // are lost, so re-read the full state every time the connection comes back.
+  let wasConnected = false;
+  agentStatus.subscribe((s) => {
+    if (s.connected && !wasConnected) void refreshAiStatus();
+    wasConnected = s.connected;
   });
 
   void refreshAiStatus();
