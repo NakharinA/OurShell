@@ -107,6 +107,8 @@ const en: Dict = {
   "h.aiAllowSub": "AI clients can only see hosts allowed here, and every action still waits for your approval",
   "h.aiUser": "Run AI commands as user",
   "h.aiUserPh": "(optional) e.g. a restricted \"ai\" user",
+  "h.aiReadonlyAuto": "Allow read-only AI tools without approval",
+  "h.aiReadonlyAutoSub": "kubectl get/describe/logs/events and basic system status may run without waiting for you to approve; they never show configmap/secret contents",
   "h.theme": "Terminal theme",
   "h.font": "Font size",
   "h.share": "Share this host",
@@ -242,6 +244,7 @@ const en: Dict = {
 
   "mode.normal": "Normal",
   "mode.dangerous": "Dangerous",
+  "mode.autoReadonly": "Auto (read-only)",
 
   "r.approved": "Approved",
   "r.allowed": "Allowed",
@@ -479,6 +482,8 @@ const th: Dict = {
   "h.aiAllowSub": "AI จะเห็นเฉพาะโฮสต์ที่อนุญาตไว้ และทุกการกระทำยังต้องรอการอนุมัติจากคุณ",
   "h.aiUser": "รันคำสั่ง AI ในนามผู้ใช้",
   "h.aiUserPh": "(ไม่บังคับ) เช่น ผู้ใช้ \"ai\" ที่ถูกจำกัดสิทธิ์",
+  "h.aiReadonlyAuto": "อนุญาตเครื่องมือ AI แบบอ่านอย่างเดียวโดยไม่ต้องขออนุมัติ",
+  "h.aiReadonlyAutoSub": "kubectl get/describe/logs/events และสถานะระบบพื้นฐานอาจรันได้โดยไม่ต้องรอการอนุมัติจากคุณ โดยจะไม่แสดงเนื้อหาของ configmap/secret เด็ดขาด",
   "h.theme": "ธีมเทอร์มินัล",
   "h.font": "ขนาดตัวอักษร",
   "h.share": "แชร์โฮสต์นี้",
@@ -614,6 +619,7 @@ const th: Dict = {
 
   "mode.normal": "ปกติ",
   "mode.dangerous": "อันตราย",
+  "mode.autoReadonly": "อัตโนมัติ (อ่านอย่างเดียว)",
 
   "r.approved": "อนุมัติแล้ว",
   "r.allowed": "อนุญาต",

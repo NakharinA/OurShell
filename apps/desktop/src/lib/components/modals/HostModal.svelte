@@ -340,6 +340,10 @@
           <label for="h-aiuser">{$t("h.aiUser")}</label>
           <div class="input"><input id="h-aiuser" bind:value={form.ai_user} placeholder={$t("h.aiUserPh")} /></div>
         </div>
+        <div class="toggle-row">
+          <span class="grow"><b>{$t("h.aiReadonlyAuto")}</b><small>{$t("h.aiReadonlyAutoSub")}</small></span>
+          <label class="switch"><input type="checkbox" bind:checked={form.ai_readonly_auto} /><span></span></label>
+        </div>
       {/if}
     </div>
 

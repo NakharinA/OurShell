@@ -37,6 +37,11 @@ pub mod method {
     pub const AI_LIST_DIR: &str = "ai.list_dir";
     pub const AI_READ_FILE: &str = "ai.read_file";
     pub const AI_WRITE_FILE: &str = "ai.write_file";
+    pub const AI_K8S_GET: &str = "ai.k8s_get";
+    pub const AI_K8S_DESCRIBE: &str = "ai.k8s_describe";
+    pub const AI_K8S_LOGS: &str = "ai.k8s_logs";
+    pub const AI_K8S_EVENTS: &str = "ai.k8s_events";
+    pub const AI_SYSTEM_STATUS: &str = "ai.system_status";
     pub const AI_APPROVALS: &str = "ai.approvals";
     pub const AI_DECIDE: &str = "ai.decide";
     pub const AI_DANGEROUS: &str = "ai.dangerous";
@@ -344,6 +349,72 @@ pub struct ForwardInfo {
 pub struct AiHost {
     pub name: String,
     pub tags: Vec<String>,
+}
+
+// ----- typed read-only AI tools (k8s_*, system_status) -----
+//
+// These never carry a shell command: the AI supplies a handful of strictly
+// validated tokens and the agent builds the remote command itself (see
+// `ourshell::agent::k8s`). The result type is the same `ExecResult` as
+// `ai.run` so every front-end formats them the same way.
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct K8sGetParams {
+    /// Name or id of an AI-allowed host, exactly as returned by `list_hosts`.
+    pub host: String,
+    /// Resource kind, e.g. `pods`, `deploy`, `svc`. Aliases are accepted.
+    pub kind: String,
+    /// Required for namespaced kinds; must be omitted for cluster-scoped
+    /// kinds (`nodes`, `namespaces`, `persistentvolumes`).
+    #[serde(default)]
+    pub namespace: Option<String>,
+    /// Optional resource name to get a single object instead of a list.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct K8sDescribeParams {
+    /// Name or id of an AI-allowed host, exactly as returned by `list_hosts`.
+    pub host: String,
+    /// Resource kind, e.g. `pods`, `deploy`, `svc`. Aliases are accepted.
+    /// `configmaps` is not allowed here (describe prints the data); use
+    /// `run_command` for that, which requires approval.
+    pub kind: String,
+    /// Required for namespaced kinds; must be omitted for cluster-scoped
+    /// kinds (`nodes`, `namespaces`, `persistentvolumes`).
+    #[serde(default)]
+    pub namespace: Option<String>,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct K8sLogsParams {
+    /// Name or id of an AI-allowed host, exactly as returned by `list_hosts`.
+    pub host: String,
+    pub namespace: String,
+    pub pod: String,
+    #[serde(default)]
+    pub container: Option<String>,
+    /// Number of lines from the end of the log; default 200, max 500.
+    #[serde(default)]
+    pub tail: Option<u32>,
+    /// A duration like `30s`, `15m`, `2h`, `1d` (1-4 digits plus a unit); max 7d.
+    #[serde(default)]
+    pub since: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct K8sEventsParams {
+    /// Name or id of an AI-allowed host, exactly as returned by `list_hosts`.
+    pub host: String,
+    pub namespace: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemStatusParams {
+    /// Name or id of an AI-allowed host, exactly as returned by `list_hosts`.
+    pub host: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
