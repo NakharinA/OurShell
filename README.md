@@ -39,6 +39,13 @@ The CLI starts a local agent (`ourshell agent`) on demand. It holds the unlocked
 vault, auto-locks after 15 idle minutes, and exits when idle and locked. The
 desktop app and the MCP server talk to the same agent.
 
+## Updating
+
+Updates only ever come from [GitHub Releases](https://github.com/NakharinA/OurShell/releases) on this repository.
+
+- **Desktop app**: signed release builds check for updates on startup, every 6 hours, and via "Check for updates" in the sidebar's profile menu. When one is found, a banner offers "Install and restart" (downloads, verifies the signature, and relaunches). See [`docs/release-signing.md`](docs/release-signing.md) for how releases are signed and published.
+- **CLI / MCP server**: run `ourshell update` to download, verify (SHA-256) and install the latest release in place, replacing the running `ourshell` (and `ourshell-mcp`, if present next to it). `ourshell update --check` only reports whether a newer version exists (exit code `10` if so, `0` otherwise -- handy in scripts) without installing anything.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Please report security problems privately, as described in [SECURITY.md](SECURITY.md).

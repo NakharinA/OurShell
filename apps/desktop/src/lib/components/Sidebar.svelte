@@ -18,6 +18,7 @@
   import { refreshVaultStatus } from "../stores/vault";
   import { uiTheme } from "../stores/theme";
   import { toast, errorText } from "../stores/toast";
+  import { appVersion, checkForUpdates, loadAppVersion } from "../stores/update";
   import { onMount } from "svelte";
 
   let menu: "vault" | "lang" | "profile" | null = null;
@@ -28,7 +29,13 @@
   onMount(() => {
     refreshTeams().catch(() => {});
     void refreshAccountStatus();
+    void loadAppVersion();
   });
+
+  function checkForUpdatesNow(): void {
+    menu = null;
+    void checkForUpdates(true);
+  }
 
   function openMenuAt(which: typeof menu, e: MouseEvent): void {
     const btn = e.currentTarget as HTMLElement;
@@ -242,6 +249,10 @@
         <span>{$t("pm.syncNow")}</span>
       </button>
     {/if}
+    <button class="menu-item" on:click={checkForUpdatesNow}>
+      <Icon name="refresh" />
+      <span>{$t("pm.checkUpdates")}</span>
+    </button>
     <div class="menu-sep"></div>
     <button class="menu-item" on:click={lock}>
       <Icon name="lock" />
@@ -253,5 +264,7 @@
         <span>{$t("pm.signout")}</span>
       </button>
     {/if}
+    <div class="menu-sep"></div>
+    <div class="menu-label about">{format($t("pm.about"), { v: $appVersion || "…" })}</div>
   </Menu>
 {/if}

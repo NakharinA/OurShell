@@ -5,7 +5,7 @@ members = ["."]
 [package]
 name = "ourshell-desktop"
 description = "OurShell desktop app (Tauri 2 shell over the local agent)"
-version = "0.0.1"
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/NakharinA/OurShell"
@@ -42,6 +42,16 @@ thiserror = "2"
 log = "0.4"
 tauri-plugin-updater = { version = "2", optional = true }
 tauri-plugin-process = { version = "2", optional = true }
+# Fallback update check for builds without the `updater` feature (see
+# commands::check_latest_release): queries the GitHub API for the latest
+# release from Rust rather than the webview, so the CSP's connect-src never
+# needs to allow api.github.com. `rustls-tls` (not `default-tls`) so it uses
+# the pure-Rust `ring` provider, same choice as ourshell-core's sync client.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
+semver = "1"
 
 [profile.release]
 panic = "abort"

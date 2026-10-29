@@ -13,17 +13,34 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Fails fast if the pushed tag doesn't match the version recorded in the
+  # workspace (and the other manifests scripts/check-version.mjs checks), so
+  # a forgotten `node scripts/bump-version.mjs` never ships a mismatched
+  # release. desktop-release.yml runs the same check independently.
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-version.mjs --tag "${{ github.ref_name }}"
+
   build:
     name: ${{ matrix.target }}
+    needs: check-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, ext: "" }
+          # Same five targets as desktop-release.yml, so one draft release
+          # holds installers and CLI/MCP archives for every platform.
           - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: ".exe" }
+          - { os: windows-latest, target: aarch64-pc-windows-msvc, ext: ".exe" }
           - { os: macos-latest, target: aarch64-apple-darwin, ext: "" }
-          - { os: macos-13, target: x86_64-apple-darwin, ext: "" }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, ext: "" }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, ext: "" }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -32,6 +49,13 @@ jobs:
       - name: Install Linux deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      # `ring` (reqwest's rustls-tls provider) needs clang to cross-compile
+      # its assembly for Windows ARM64; see desktop-release.yml for the same
+      # need on the desktop build.
+      - name: Put LLVM on PATH (Windows ARM64 cross build)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: pwsh
+        run: echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p ourshell -p ourshell-mcp
       - name: Package
@@ -57,8 +81,13 @@ jobs:
           subject-path: |
             dist/*.zip
             dist/*.tar.gz
+      # Same tag/release name as desktop-release.yml and `draft: true`, so
+      # both workflows' assets land in one draft release instead of two.
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          name: OurShell ${{ github.ref_name }}
+          draft: true
           files: |
             dist/*.zip
             dist/*.tar.gz

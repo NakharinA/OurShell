@@ -4,7 +4,7 @@ members = ["crates/core", "crates/proto", "crates/cli", "crates/mcp", "server"]
 exclude = ["apps/desktop/src-tauri", "fuzz"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/NakharinA/OurShell"

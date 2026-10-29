@@ -25,6 +25,10 @@
         { "path": "$DOCUMENT/**" },
         { "path": "$DESKTOP/**" }
       ]
+    },
+    {
+      "identifier": "shell:allow-open",
+      "allow": [{ "url": "^https://github\\.com/NakharinA/OurShell(/.*)?$" }]
     }
   ]
 }

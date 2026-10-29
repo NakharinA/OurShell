@@ -27,8 +27,22 @@ permissions:
   attestations: write
 
 jobs:
+  # Fails fast if the pushed tag doesn't match the workspace version (see
+  # release.yml, which runs the same check independently for the CLI/MCP
+  # build). Keeping both means a tag that races ahead of a version bump
+  # never gets partway through either workflow before failing.
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-version.mjs --tag "${{ github.ref_name }}"
+
   bundle:
     name: ${{ matrix.name }}
+    needs: check-version
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -127,6 +141,11 @@ jobs:
           releaseName: OurShell ${{ github.ref_name }}
           releaseDraft: true
           includeUpdaterJson: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          # Windows builds both NSIS and MSI; the updater can only point at
+          # one artifact per platform, and NSIS supports the silent/passive
+          # install the updater config asks for (MSI's UI can't be fully
+          # suppressed the same way), so prefer it in the generated latest.json.
+          updaterJsonPreferNsis: true
           args: >-
             --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
             ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && '--features updater --config src-tauri/tauri.updater.conf.json' || '' }}
