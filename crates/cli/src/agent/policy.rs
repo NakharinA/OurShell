@@ -8,12 +8,10 @@
 //!   blocks the session until it reconnects with a new id.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use ourshell_proto::agent::{AiSessionInfo, ApprovalRequest};
-use regex::Regex;
 use tokio::sync::oneshot;
 
 pub const DEFAULT_DANGEROUS_MINUTES: u64 = 60;
@@ -200,41 +198,15 @@ impl Policy {
     }
 }
 
-fn redaction_patterns() -> &'static [Regex] {
-    static P: OnceLock<Vec<Regex>> = OnceLock::new();
-    P.get_or_init(|| {
-        [
-            // PEM private keys (any type).
-            r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z0-9 ]*PRIVATE KEY-----|$)",
-            // AWS access key ids and secret-looking assignments.
-            r"\b(AKIA|ASIA)[0-9A-Z]{16}\b",
-            r#"(?i)(aws_secret_access_key|secret|token|password|passwd|api[_-]?key)(\s*[:=]\s*)["']?[^\s"']{6,}"#,
-            // GitHub, GitLab, Slack, OpenAI/Anthropic-style tokens.
-            r"\bgh[pousr]_[A-Za-z0-9]{30,}\b",
-            r"\bglpat-[A-Za-z0-9_\-]{20,}\b",
-            r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b",
-            r"\bsk-(ant-)?[A-Za-z0-9_\-]{20,}\b",
-            // JWTs.
-            r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b",
-        ]
-        .iter()
-        .map(|p| Regex::new(p).expect("valid redaction regex"))
-        .collect()
-    })
+/// Masks strings that look like secrets before output reaches the AI.
+pub fn redact(text: &str) -> String {
+    super::redact::redact(text)
 }
 
-/// Masks strings that look like keys or tokens before output reaches the AI.
-pub fn redact(text: &str) -> String {
-    let mut out = text.to_string();
-    for (i, re) in redaction_patterns().iter().enumerate() {
-        out = if i == 2 {
-            re.replace_all(&out, "${1}${2}[REDACTED]").into_owned()
-        } else {
-            re.replace_all(&out, "[REDACTED]").into_owned()
-        };
-    }
-    out
-}
+/// Extra bytes fetched beyond the output cap so redaction sees a secret whole
+/// before the cut; otherwise a secret split by the size limit could slip
+/// through half-masked.
+pub const REDACTION_SLACK: usize = 16 * 1024;
 
 /// Truncates to at most `max` bytes on a char boundary. Returns (text, truncated).
 pub fn cap(text: String, max: usize) -> (String, bool) {
@@ -349,20 +321,6 @@ mod tests {
         assert!(!p.resolve("b", true));
         assert_eq!(a.try_recv(), Ok(true));
         assert_eq!(b.try_recv(), Ok(false));
-    }
-
-    #[test]
-    fn redaction() {
-        let pem =
-            "x\n-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\ny";
-        assert_eq!(redact(pem), "x\n[REDACTED]\ny");
-        assert_eq!(redact("key AKIAABCDEFGHIJKLMNOP"), "key [REDACTED]");
-        assert_eq!(redact("PASSWORD=hunter2hunter2"), "PASSWORD=[REDACTED]");
-        assert_eq!(
-            redact("tok ghp_abcdefghijklmnopqrstuvwxyz0123456789"),
-            "tok [REDACTED]"
-        );
-        assert_eq!(redact("plain output"), "plain output");
     }
 
     #[test]
