@@ -773,7 +773,7 @@ cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe *SHA256SUMS-oth
 
         let file = std::fs::File::create(&archive_path).unwrap();
         let mut zip = zip::ZipWriter::new(file);
-        let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+        let opts = zip::write::SimpleFileOptions::default();
         zip.start_file("ourshell-v0.6.0-x86_64-pc-windows-msvc/ourshell.exe", opts)
             .unwrap();
         zip.write_all(b"fake cli").unwrap();
