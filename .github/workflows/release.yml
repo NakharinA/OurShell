@@ -57,7 +57,7 @@ jobs:
           subject-path: |
             dist/*.zip
             dist/*.tar.gz
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.zip
