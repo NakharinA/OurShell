@@ -65,11 +65,25 @@ impl AgentHandle {
     }
 }
 
+/// Latest connection status, so a webview that (re)loads after the last
+/// `agent-status` event (e.g. a dev-server reload) can still ask for it.
+static LAST_STATUS: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+
+/// The most recent status sent to the webview.
+pub fn last_status() -> Value {
+    LAST_STATUS
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .unwrap_or_else(|| serde_json::json!({ "connected": false, "detail": "starting" }))
+}
+
 fn emit_status(app: &AppHandle, connected: bool, detail: impl Into<String>) {
-    let _ = app.emit(
-        "agent-status",
-        serde_json::json!({ "connected": connected, "detail": detail.into() }),
-    );
+    let status = serde_json::json!({ "connected": connected, "detail": detail.into() });
+    if let Ok(mut s) = LAST_STATUS.lock() {
+        *s = Some(status.clone());
+    }
+    let _ = app.emit("agent-status", status);
 }
 
 /// Owns the connection for its lifetime; reconnects (and re-spawns the agent if

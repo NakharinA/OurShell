@@ -122,9 +122,21 @@ class AgentClient {
       },
     );
     this.unlistenStatus = await listen<AgentStatusPayload>("agent-status", (e) => {
-      this.lastStatus = e.payload;
-      for (const h of this.statusHandlers) h(e.payload);
+      this.setStatus(e.payload);
     });
+    // Events sent before this page was listening are gone (e.g. after a
+    // reload), so also ask the bridge for its current status.
+    try {
+      const current = await invoke<AgentStatusPayload | null>("agent_status");
+      if (current && typeof current.connected === "boolean") this.setStatus(current);
+    } catch {
+      // Older bridge without the command: keep waiting for events.
+    }
+  }
+
+  private setStatus(status: AgentStatusPayload): void {
+    this.lastStatus = status;
+    for (const h of this.statusHandlers) h(status);
   }
 
   dispose(): void {

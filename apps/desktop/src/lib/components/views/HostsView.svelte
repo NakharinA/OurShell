@@ -189,7 +189,9 @@
     groupEditor.set({ mode: "new", parentId: $hostsGroupFilter });
   }
 
-  let focusedHost: ItemRecord<Host> | null = null;
+  /** Single click selects; double click (or Enter) connects. Delete / Ctrl+E act on the selection. */
+  let selectedId: string | null = null;
+  $: selectedHost = selectedId ? ($hosts.find((h) => h.id === selectedId) ?? null) : null;
 
   /** Typing targets (inputs, terminals) keep their keys; shortcuts are for the host list. */
   function isTypingTarget(target: EventTarget | null): boolean {
@@ -212,12 +214,12 @@
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n") {
       e.preventDefault();
       hostEditor.set({ mode: "new", groupId: $hostsGroupFilter });
-    } else if (focusedHost && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
+    } else if (selectedHost && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
       e.preventDefault();
-      doEdit(focusedHost);
-    } else if (focusedHost && e.key === "Delete") {
+      doEdit(selectedHost);
+    } else if (selectedHost && e.key === "Delete") {
       e.preventDefault();
-      void doRemove(focusedHost);
+      void doRemove(selectedHost);
     }
   }
 </script>
@@ -288,13 +290,18 @@
         {#each visibleHosts as h (h.id)}
           <div
             class="item"
+            class:selected={selectedId === h.id}
             role="button"
             tabindex="0"
-            on:click={() => connect(h)}
+            aria-pressed={selectedId === h.id}
+            on:click={() => (selectedId = h.id)}
+            on:dblclick={() => connect(h)}
             on:keydown={(e) => e.key === "Enter" && connect(h)}
-            on:contextmenu={(e) => openCtxAtPoint(e, h)}
-            on:focus={() => (focusedHost = h)}
-            on:mouseenter={() => (focusedHost = h)}
+            on:contextmenu={(e) => {
+              selectedId = h.id;
+              openCtxAtPoint(e, h);
+            }}
+            on:focus={() => (selectedId = h.id)}
           >
             <span class="round"><Icon name="hosts" /></span>
             <span class="meta">
