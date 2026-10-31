@@ -480,24 +480,27 @@ the restart skips the wizard.
 
 ## Advanced: manual docker compose
 
-The repository's own `docker-compose.yml` builds the server from source and
-configures it entirely through environment variables -- no wizard, no
-`config.toml` needed:
+The repository's own `docker-compose.yml` runs the same two containers
+without the installer. It names the published image and can also build it
+from source:
 
 ```sh
 cp .env.example .env
-# Fill in SERVER_MASTER_KEY (openssl rand -base64 32) and POSTGRES_PASSWORD.
+# Set POSTGRES_PASSWORD. Optionally pin SERVER_MASTER_KEY
+# (openssl rand -base64 32) and other settings here instead of in the wizard.
+docker compose pull server        # or: docker compose build server
 docker compose up -d
-curl http://localhost:8443/v1/health
+docker compose logs server        # shows the setup code
 ```
 
-Because both `DATABASE_URL` and `SERVER_MASTER_KEY` come from the
-environment, the server starts straight in normal mode, and every setting
-the variables pin shows read-only on `/admin`. To use the `/admin` page,
-mount a volume at `/data` (so `config.toml` survives re-creating the
-container) and set its password with
-`docker compose exec server ourshell-server set-admin-password`, then
-restart the server.
+- **`SERVER_MASTER_KEY` left empty:** the server starts in setup mode. Open
+  `http://<host>:8443/setup` and the wizard generates the key into
+  `config.toml` in the `ourshell-data` volume.
+- **`SERVER_MASTER_KEY` set:** together with `DATABASE_URL`, the server starts
+  straight in normal mode. Every setting the variables pin shows read-only on
+  `/admin`. Set the admin password with
+  `docker compose exec server ourshell-server set-admin-password`, then
+  restart the server.
 
 ## Running multiple replicas
 
