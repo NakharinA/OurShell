@@ -96,7 +96,8 @@ No script needed: the server is one public image for amd64 and arm64 that any Do
 | Registry URL | `https://ghcr.io` (GitHub Container Registry) |
 | Username | none: the image is public |
 | Password | none: the image is public |
-| Port | `8443` (HTTP); `8444` for built-in HTTPS, published as `443` |
+| Port | `8443` (HTTP); optional built-in HTTPS on `8444`, published as `3000` by default (forward public TCP 443 to it for Let's Encrypt) |
+| Behind a reverse proxy / ingress | set `OURSHELL_BEHIND_PROXY=true` (and `PUBLIC_URL=https://...`), publish only `8443`; the proxy handles HTTPS ([setup](docs/self-hosting.md#behind-a-reverse-proxy-or-ingress)) |
 | Volume | a named volume at `/data` (configuration and master key) |
 | Database | PostgreSQL: set `DATABASE_URL`, or enter it in the setup wizard |
 
