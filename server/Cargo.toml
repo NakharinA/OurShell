@@ -97,6 +97,15 @@ tokio-rustls = { version = "0.26", default-features = false, features = [
 futures = "0.3"
 ipnet = "2"
 
+# Built-in encrypted backups to S3-compatible storage (see `src/backup/`).
+# Same reqwest line and TLS choice as ourshell-core (`rustls-tls` -> rustls
+# with the `ring` provider, never aws-lc-sys); SigV4 is hand-rolled on
+# hmac + sha2 0.10 instead of pulling in the AWS SDK. flate2's default
+# backend is the pure-Rust miniz_oxide.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+hmac = "0.12"
+flate2 = "1"
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

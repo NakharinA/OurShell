@@ -10,8 +10,8 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use axum::Router;
 use http_body_util::BodyExt;
-use ourshell_server::config::Config;
-use ourshell_server::settings::{self, Effective};
+use ourshell_server::settings::{self, Effective, FileConfig};
+use ourshell_server::startup::{self, Decision, Remembered};
 use ourshell_server::web::{admin, password, setup, Reload};
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -54,6 +54,21 @@ async fn call(
     (status, value, set_cookie)
 }
 
+/// The database's settings, decrypted with the app's master key.
+async fn db_settings(app: &common::TestApp) -> FileConfig {
+    settings::db::read(&app.pool, &app.state.config().server_master_key)
+        .await
+        .unwrap()
+        .unwrap_or_default()
+}
+
+/// What a restart would do with this data dir and no environment.
+async fn decide(dir: &std::path::Path) -> Decision {
+    startup::decide(dir, &|_| None, &Remembered::default(), Duration::ZERO)
+        .await
+        .unwrap()
+}
+
 async fn reloaded(rx: &mut tokio::sync::watch::Receiver<u64>) -> bool {
     tokio::time::timeout(Duration::from_secs(5), rx.changed())
         .await
@@ -62,12 +77,10 @@ async fn reloaded(rx: &mut tokio::sync::watch::Receiver<u64>) -> bool {
 
 #[tokio::test]
 async fn setup_wizard_writes_config_and_reloads() {
-    // Only needs a reachable Postgres to test the connection against.
-    if common::setup().await.is_none() {
+    let Some(db) = common::temp_schema().await else {
         return;
-    }
-    let db_url = std::env::var("TEST_DATABASE_URL")
-        .unwrap_or_else(|_| common::DEFAULT_TEST_DATABASE_URL.to_string());
+    };
+    let db_url = db.url.clone();
     let dir = temp_dir();
     let reload = Reload::default();
     let mut rx = reload.subscribe();
@@ -154,16 +167,24 @@ async fn setup_wizard_writes_config_and_reloads() {
     .await;
     assert_eq!(s, StatusCode::OK, "{body}");
     let master_key = body["master_key"].as_str().unwrap().to_string();
-    assert!(body["config_toml"].as_str().unwrap().contains(&master_key));
+    let config_toml = body["config_toml"].as_str().unwrap();
+    assert!(config_toml.contains(&master_key));
+    // Only the bootstrap keys go to config.toml; the rest to the database.
+    assert!(!config_toml.contains("invite_only") && !config_toml.contains("argon2"));
+    assert_eq!(body["persistent"], true, "{body}");
+    assert_eq!(body["env_lines"], json!([]));
     assert!(
         reloaded(&mut rx).await,
         "finishing setup reloads the server"
     );
+    let file = settings::read(&dir).unwrap();
+    assert_eq!(file, file.bootstrap());
 
-    // The saved file is a complete config.
-    let cfg = Config::load(&dir)
-        .unwrap()
-        .expect("config is complete after setup");
+    // A restart with this data dir starts ready, settings from the database.
+    let Decision::Ready(ready) = decide(&dir).await else {
+        panic!("expected ready after setup");
+    };
+    let cfg = &ready.config;
     assert_eq!(cfg.database_url, db_url);
     assert!(cfg.invite_only && cfg.signups_enabled);
     assert_eq!(cfg.max_devices_per_user, 4);
@@ -172,11 +193,13 @@ async fn setup_wizard_writes_config_and_reloads() {
         "a long admin password",
         cfg.admin_password_hash.as_deref().unwrap()
     ));
+    ready.pool.close().await;
 
     // Setup is one-shot.
     let (s, _, _) = call(&app, "POST", "/setup/api/finish", None, false, Some(finish)).await;
     assert_eq!(s, StatusCode::CONFLICT);
     std::fs::remove_dir_all(dir).unwrap();
+    db.drop().await;
 }
 
 #[tokio::test]
@@ -218,8 +241,12 @@ async fn admin_page() {
         data_dir: dir.clone(),
         sessions: Arc::new(admin::Sessions::default()),
         reload,
-        env_locked: Arc::new(vec!["rate_limit_per_min"]),
+        effective: Arc::new(Effective {
+            env_locked: vec!["rate_limit_per_min"],
+            ..Default::default()
+        }),
         tls_status: Arc::new(Default::default()),
+        backups: ourshell_server::backup::Backups::new(dir.to_path_buf()),
     });
 
     // Signed out, and the CSRF header is required.
@@ -369,6 +396,7 @@ async fn admin_page() {
     // Settings: env-pinned keys are reported and left alone; others saved.
     let (_, body, _) = call(&web, "GET", "/admin/api/settings", c, false, None).await;
     assert_eq!(body["env_locked"], json!(["rate_limit_per_min"]));
+    assert_eq!(body["file_locked"], json!([]));
     let mut new = body["settings"].clone();
     new["public_url"] = json!("ftp://nope");
     let (s, _, _) = call(
@@ -397,7 +425,9 @@ async fn admin_page() {
     let (s, _, _) = call(&web, "PUT", "/admin/api/settings", c, true, Some(new)).await;
     assert_eq!(s, StatusCode::OK);
     assert!(reloaded(&mut rx).await);
-    let file = settings::read(&dir).unwrap();
+    // Saved in the database (encrypted), not in the data dir.
+    assert!(!dir.join(settings::CONFIG_FILE).exists());
+    let file = db_settings(&app).await;
     assert_eq!(file.signups_enabled, Some(false));
     assert_eq!(file.public_url.as_deref(), Some("https://sync.example.com"));
     assert_eq!(file.rate_limit_per_min, None, "env-locked key not written");
@@ -427,8 +457,8 @@ async fn admin_page() {
     assert_eq!(s, StatusCode::UNAUTHORIZED);
     assert!(password::verify(
         "another long password",
-        settings::read(&dir)
-            .unwrap()
+        db_settings(&app)
+            .await
             .admin_password_hash
             .as_deref()
             .unwrap()
@@ -485,8 +515,12 @@ fn admin_router(
         data_dir: dir.to_path_buf(),
         sessions: Arc::new(admin::Sessions::default()),
         reload: Reload::default(),
-        env_locked: Arc::new(env_locked),
+        effective: Arc::new(Effective {
+            env_locked,
+            ..Default::default()
+        }),
         tls_status: Arc::new(Default::default()),
+        backups: ourshell_server::backup::Backups::new(dir.to_path_buf()),
     })
 }
 
@@ -596,7 +630,7 @@ async fn behind_proxy() {
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    let file = settings::read(&dir).unwrap();
+    let file = db_settings(&app).await;
     assert_eq!(file.behind_proxy, Some(true));
     assert_eq!(
         file.trusted_proxies,
@@ -608,11 +642,10 @@ async fn behind_proxy() {
 
 #[tokio::test]
 async fn setup_wizard_behind_proxy() {
-    if common::setup().await.is_none() {
+    let Some(db) = common::temp_schema().await else {
         return;
-    }
-    let db_url = std::env::var("TEST_DATABASE_URL")
-        .unwrap_or_else(|_| common::DEFAULT_TEST_DATABASE_URL.to_string());
+    };
+    let db_url = db.url.clone();
     let dir = temp_dir();
     let app = setup::router(setup::SetupCtx::new(
         dir.clone(),
@@ -639,15 +672,18 @@ async fn setup_wizard_behind_proxy() {
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{body}");
-    let file = settings::read(&dir).unwrap();
-    assert_eq!(file.behind_proxy, Some(true));
+    let Decision::Ready(ready) = decide(&dir).await else {
+        panic!("expected ready after setup");
+    };
+    assert_eq!(ready.effective.values.behind_proxy, Some(true));
     assert_eq!(
-        file.tls, None,
+        ready.effective.values.tls, None,
         "behind a proxy, the built-in certificate is off"
     );
-    let cfg = Config::load(&dir).unwrap().unwrap();
-    assert!(cfg.proxy.enabled() && cfg.tls.is_none());
+    assert!(ready.config.proxy.enabled() && ready.config.tls.is_none());
+    ready.pool.close().await;
     std::fs::remove_dir_all(dir).unwrap();
+    db.drop().await;
 }
 
 #[tokio::test]

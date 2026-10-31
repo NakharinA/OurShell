@@ -7,6 +7,7 @@
 //! `totp.secret` to protect stolen backups (`SERVER_MASTER_KEY`).
 
 pub mod auth;
+pub mod backup;
 pub mod config;
 pub mod crypto;
 pub mod db;
@@ -17,6 +18,7 @@ pub mod rate_limit;
 pub mod routes;
 pub mod settings;
 pub mod sqlx;
+pub mod startup;
 pub mod state;
 pub mod tls;
 pub mod web;
@@ -28,45 +30,33 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use axum::serve::ListenerExt;
 
-use crate::config::{Config, DEFAULT_BIND_ADDR};
-use crate::sqlx::{migrate::Migrator, PgPoolOptions};
+use crate::config::DEFAULT_BIND_ADDR;
+use crate::sqlx::migrate::Migrator;
 use crate::state::AppState;
 
-/// Connects to Postgres, runs migrations, and builds the ready-to-serve
-/// [`AppState`]. Split out from [`run`] so integration tests can build the
-/// router without binding a real socket.
-pub async fn build_state(config: Config) -> Result<AppState> {
-    let pool = PgPoolOptions::new()
-        .max_connections(10)
-        .connect(&config.database_url)
-        .await
-        .context("failed to connect to DATABASE_URL")?;
-    // Runtime migration loading (reads `migrations/*.sql` off disk at
-    // startup) rather than the `sqlx::migrate!` compile-time macro -- see
-    // `src/sqlx.rs` for why this crate avoids the `sqlx` facade's "macros"
-    // feature entirely.
-    //
-    // `MIGRATIONS_DIR` overrides the location (the Docker image sets it to
-    // where the Dockerfile copied `server/migrations/`, since the
-    // `CARGO_MANIFEST_DIR` default below is a build-time path that only
-    // exists on the machine that compiled the binary).
+/// This server's database migrations.
+///
+/// Runtime migration loading (reads `migrations/*.sql` off disk at startup)
+/// rather than the `sqlx::migrate!` compile-time macro -- see `src/sqlx.rs`
+/// for why this crate avoids the `sqlx` facade's "macros" feature entirely.
+///
+/// `MIGRATIONS_DIR` overrides the location (the Docker image sets it to
+/// where the Dockerfile copied `server/migrations/`, since the
+/// `CARGO_MANIFEST_DIR` default below is a build-time path that only exists
+/// on the machine that compiled the binary).
+pub async fn migrator() -> Result<Migrator> {
     let migrations_dir = std::env::var("MIGRATIONS_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations"));
-    let migrator = Migrator::new(migrations_dir.as_path())
+    Migrator::new(migrations_dir.as_path())
         .await
-        .context("failed to load migrations directory")?;
-    migrator
-        .run(&pool)
-        .await
-        .context("failed to run database migrations")?;
-    AppState::new(pool, config).await
+        .context("failed to load migrations directory")
 }
 
-/// Serves until the process is stopped. Starts in setup mode (the `/setup`
-/// wizard) when there is no database URL or master key yet, and rebuilds
-/// the whole app in place, on the same socket, whenever the setup wizard or
-/// the admin page changes the configuration.
+/// Serves until the process is stopped. [`startup::decide`] picks the app
+/// or the setup wizard (`/setup`); the whole app is rebuilt in place, on
+/// the same socket, whenever the setup wizard or the admin page changes
+/// the configuration (or an unreachable database comes back).
 pub async fn run() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -99,37 +89,111 @@ pub async fn run() -> Result<()> {
 
     let reload = web::Reload::default();
     let sessions = std::sync::Arc::new(web::admin::Sessions::default());
+    let backups = backup::Backups::new(data_dir.clone());
+    let remembered = startup::Remembered::default();
     loop {
-        let effective = settings::load(&data_dir)?;
         let changed = reload.subscribe();
-        let config = Config::from_effective(&effective)?;
-        let wanted_tls = tls::wanted(config.as_ref());
-        let app = match config {
-            Some(config) => {
-                let state = build_state(config).await?;
-                routes::build_router(state.clone()).merge(web::admin::router(
-                    web::admin::AdminCtx {
-                        state,
-                        data_dir: data_dir.clone(),
-                        sessions: sessions.clone(),
-                        reload: reload.clone(),
-                        env_locked: std::sync::Arc::new(effective.env_locked.clone()),
-                        tls_status: tls_status.clone(),
-                    },
-                ))
+        // Deciding can take a while (up to a minute waiting for the
+        // database); meanwhile answer health checks, so an orchestrator's
+        // liveness probe doesn't restart the server, and show a short page.
+        let (decided, decided_rx) = tokio::sync::oneshot::channel::<()>();
+        let starting = tokio::spawn(
+            axum::serve(
+                listener.clone().tap_io(|_| {}),
+                web::starting_router().into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = decided_rx.await;
+            })
+            .into_future(),
+        );
+        let decision = startup::decide(
+            &data_dir,
+            &settings::process_env,
+            &remembered,
+            startup::CONNECT_WAIT,
+        )
+        .await;
+        let _ = decided.send(());
+        let _ = starting.await;
+        let decision = decision?;
+        // Per-generation tasks, like the TLS ones below; dropping them on
+        // reload stops them.
+        let mut backup_schedule = None;
+        let mut db_retry = None;
+        let (app, wanted_tls) = match decision {
+            startup::Decision::Ready(ready) => {
+                let startup::Ready {
+                    config,
+                    effective,
+                    pool,
+                    key_from_env,
+                } = *ready;
+                if !key_from_env {
+                    warn_if_key_not_persistent(&data_dir);
+                }
+                let wanted_tls = tls::wanted(Some(&config));
+                let state = AppState::new(pool, config).await?;
+                let ctx = web::admin::AdminCtx {
+                    state: state.clone(),
+                    data_dir: data_dir.clone(),
+                    sessions: sessions.clone(),
+                    reload: reload.clone(),
+                    effective: std::sync::Arc::new(effective),
+                    tls_status: tls_status.clone(),
+                    backups: backups.clone(),
+                };
+                backup_schedule = Some(backups.start(ctx.store()));
+                tracing::info!("ready");
+                (
+                    routes::build_router(state).merge(web::admin::router(ctx)),
+                    wanted_tls,
+                )
             }
-            None => {
+            startup::Decision::Setup(setup_state) => {
                 let code = settings::setup_code(&data_dir)?;
+                let why = match setup_state.phase {
+                    startup::Phase::NoDatabase => "this server is not set up yet".to_string(),
+                    startup::Phase::New => "the database has no OurShell data yet".to_string(),
+                    startup::Phase::Unreachable => format!(
+                        "can't reach the database{} ({}); retrying every {} s",
+                        setup_state
+                            .database
+                            .as_deref()
+                            .map(|d| format!(" at {d}"))
+                            .unwrap_or_default(),
+                        setup_state.error.as_deref().unwrap_or("unknown error"),
+                        startup::RETRY_EVERY.as_secs()
+                    ),
+                    startup::Phase::ExistingData => match setup_state.key_status {
+                        startup::KeyStatus::Wrong => "the master key doesn't match the existing data in this database; nothing was changed".to_string(),
+                        _ => "the database has existing OurShell data but no master key is configured (set SERVER_MASTER_KEY, or import it in the wizard)".to_string(),
+                    },
+                };
                 tracing::warn!(
-                    "this server is not set up yet: open http://<this-host>:{}/setup in a browser and enter the setup code {code}",
+                    "{why}: open http://<this-host>:{}/setup in a browser and enter the setup code {code}",
                     addr.port()
                 );
-                web::setup::router(web::setup::SetupCtx::new(
-                    data_dir.clone(),
-                    code,
-                    effective,
-                    reload.clone(),
-                ))
+                if setup_state.phase == startup::Phase::Unreachable {
+                    if let Some(url) = setup_state.database_url.clone() {
+                        db_retry = Some(startup::retry_until_reachable(url, reload.clone()));
+                    }
+                }
+                let effective =
+                    startup::Bootstrap::load(&data_dir, &settings::process_env, &remembered)?
+                        .effective;
+                (
+                    web::setup::router(
+                        web::setup::SetupCtx::new(
+                            data_dir.clone(),
+                            code,
+                            effective,
+                            reload.clone(),
+                        )
+                        .with_startup(*setup_state, remembered.clone()),
+                    ),
+                    None,
+                )
             }
         };
         // Started per generation, so a changed or removed TLS domain takes
@@ -166,8 +230,28 @@ pub async fn run() -> Result<()> {
             None => http.await?,
         }
         drop(tls_gen);
+        drop(backup_schedule);
+        drop(db_retry);
         tracing::info!("configuration changed; reloading");
     }
+}
+
+/// Logged at every startup when the master key isn't in the environment
+/// and the data dir (where `config.toml` keeps it) won't survive a
+/// redeploy.
+fn warn_if_key_not_persistent(data_dir: &Path) {
+    let p = startup::data_dir_persistence(data_dir);
+    if p.persistent {
+        return;
+    }
+    tracing::warn!(
+        "SERVER_MASTER_KEY is not set in the environment and {}: the next redeploy loses the \
+         master key, and without it the database can't be read. Copy server_master_key from \
+         {} into the SERVER_MASTER_KEY environment variable (and DATABASE_URL too, if it isn't \
+         set there), or mount a volume at the data dir.",
+        p.detail,
+        data_dir.join(settings::CONFIG_FILE).display()
+    );
 }
 
 /// The one bound socket, shared by every serve generation across reloads.
@@ -231,7 +315,7 @@ pub async fn healthcheck() -> Result<()> {
 /// `ourshell-server set-admin-password`: sets the `/admin` password from
 /// stdin (for env-only deployments, or a forgotten password). Restart the
 /// server to apply it.
-pub fn set_admin_password() -> Result<()> {
+pub async fn set_admin_password() -> Result<()> {
     let password = match std::env::var("OURSHELL_ADMIN_PASSWORD") {
         Ok(p) if !p.is_empty() => p,
         _ => {
@@ -241,15 +325,52 @@ pub fn set_admin_password() -> Result<()> {
             line.trim_end_matches(['\r', '\n']).to_string()
         }
     };
+    set_admin_password_in(&settings::data_dir(), &password, &settings::process_env).await?;
+    eprintln!("Saved. Restart the server to apply it.");
+    Ok(())
+}
+
+/// Stores a new `/admin` password hash in the database's settings (and
+/// removes a stale one from `config.toml`, which would override it).
+/// Needs the database URL and master key (environment or `config.toml`).
+pub async fn set_admin_password_in(
+    data_dir: &Path,
+    password: &str,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<()> {
     anyhow::ensure!(
         password.chars().count() >= web::password::MIN_LEN,
         "the password needs at least {} characters",
         web::password::MIN_LEN
     );
-    let dir = settings::data_dir();
-    let mut file = settings::read(&dir)?;
-    file.admin_password_hash = Some(web::password::hash(&password)?);
-    settings::write(&dir, &file)?;
-    eprintln!("Saved. Restart the server to apply it.");
+    let boot = startup::Bootstrap::load(data_dir, env, &startup::Remembered::default())?;
+    let (Some(url), Some(key)) = (boot.database_url.clone(), boot.key()?) else {
+        anyhow::bail!(
+            "set-admin-password needs the database URL and the master key: set DATABASE_URL and \
+             SERVER_MASTER_KEY (or finish the setup wizard first)"
+        );
+    };
+    let pool = startup::connect_once(&url)
+        .await
+        .map_err(|e| anyhow::anyhow!("can't connect to the database: {e}"))?;
+    anyhow::ensure!(
+        startup::check_key(&pool, &key).await? != startup::KeyStatus::Wrong,
+        "SERVER_MASTER_KEY doesn't match this database"
+    );
+    migrator()
+        .await?
+        .run(&pool)
+        .await
+        .context("failed to run database migrations")?;
+    let hash = web::password::hash(password)?;
+    let mut db = settings::db::read(&pool, &key).await?.unwrap_or_default();
+    db.admin_password_hash = Some(hash);
+    settings::db::write(&pool, &key, &db).await?;
+    pool.close().await;
+    let mut file = settings::read(data_dir)?;
+    if file.admin_password_hash.take().is_some() {
+        settings::write(data_dir, &file)?;
+        eprintln!("Removed the old admin password hash from config.toml.");
+    }
     Ok(())
 }

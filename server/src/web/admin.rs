@@ -1,5 +1,6 @@
-//! The `/admin` page, served once the server is set up. Guarded by the
-//! admin password from the setup wizard (Argon2id hash in `config.toml`);
+//! The `/admin` page, served once the server is set up. Settings changes
+//! are saved in the database (see `crate::settings`). Guarded by the admin
+//! password from the setup wizard (Argon2id hash in the settings);
 //! a successful login sets an HttpOnly, SameSite=Strict session cookie, and
 //! every state-changing call must also send `X-OurShell-Admin: 1`, which a
 //! cross-site form can't.
@@ -28,10 +29,12 @@ use crate::db;
 use crate::error::{AppError, AppResult};
 use crate::rate_limit::{limit_with, RateLimiter};
 use crate::routes::admin as org_admin;
-use crate::settings::{self, FileOidc, FileTls};
+use crate::settings::{Effective, FileOidc, FileTls, Store};
 use crate::sqlx;
 use crate::state::AppState;
 use crate::tls::{TlsStatus, ViaTls};
+
+mod backup;
 
 const COOKIE: &str = "ourshell_admin";
 const SESSION_TTL: Duration = Duration::from_secs(12 * 3600);
@@ -76,10 +79,34 @@ pub struct AdminCtx {
     pub data_dir: PathBuf,
     pub sessions: Arc<Sessions>,
     pub reload: Reload,
-    /// Settings keys pinned by environment variables (read-only here).
-    pub env_locked: Arc<Vec<&'static str>>,
+    /// The settings this generation runs with, and which keys the
+    /// environment or `config.toml` pins (read-only here).
+    pub effective: Arc<Effective>,
     /// State of the built-in HTTPS listener, for the status card.
     pub tls_status: Arc<TlsStatus>,
+    /// Scheduled backups (shared across reloads), for the Backups tab.
+    pub backups: Arc<crate::backup::Backups>,
+}
+
+impl AdminCtx {
+    /// Where settings changes are saved (the database).
+    pub fn store(&self) -> Store {
+        let cfg = self.state.config();
+        Store {
+            data_dir: self.data_dir.clone(),
+            pool: self.state.pool().clone(),
+            master_key: cfg.server_master_key,
+            database_url: cfg.database_url.clone(),
+        }
+    }
+
+    fn locked(&self, key: &str) -> bool {
+        self.effective.locked(key)
+    }
+}
+
+fn internal(e: anyhow::Error) -> AppError {
+    AppError::internal(format!("{e:#}"))
 }
 
 pub fn router(ctx: AdminCtx) -> Router {
@@ -99,7 +126,8 @@ pub fn router(ctx: AdminCtx) -> Router {
         .route("/users", get(users))
         .route("/users/{user_id}/disable", post(disable_user))
         .route("/users/{user_id}/enable", post(enable_user))
-        .route("/invites", get(invites).post(create_invite));
+        .route("/invites", get(invites).post(create_invite))
+        .merge(backup::routes());
     Router::new()
         .route("/", get(|| async { Redirect::to("/admin") }))
         .route("/setup", get(|| async { Redirect::to("/admin") }))
@@ -288,9 +316,11 @@ async fn get_settings(State(ctx): State<AdminCtx>, _: Admin) -> Json<serde_json:
         tls_domain: c.tls.as_ref().map(|t| t.domain.clone()),
         tls_email: c.tls.as_ref().and_then(|t| t.email.clone()),
         behind_proxy: c.proxy.enabled(),
-        trusted_proxies: settings::load(&ctx.data_dir)
-            .ok()
-            .and_then(|e| e.values.trusted_proxies)
+        trusted_proxies: ctx
+            .effective
+            .values
+            .trusted_proxies
+            .as_ref()
             .map(|l| l.join(", ")),
         oidc_issuer: c.oidc.as_ref().map(|o| o.issuer.clone()),
         oidc_client_id: c.oidc.as_ref().map(|o| o.client_id.clone()),
@@ -298,7 +328,11 @@ async fn get_settings(State(ctx): State<AdminCtx>, _: Admin) -> Json<serde_json:
         oidc_client_secret: None,
         oidc_secret_set: c.oidc.as_ref().is_some_and(|o| !o.client_secret.is_empty()),
     };
-    Json(json!({ "settings": view, "env_locked": *ctx.env_locked }))
+    Json(json!({
+        "settings": view,
+        "env_locked": ctx.effective.env_locked,
+        "file_locked": ctx.effective.file_locked,
+    }))
 }
 
 fn clean(s: Option<String>) -> Option<String> {
@@ -310,8 +344,9 @@ async fn put_settings(
     _: Admin,
     Json(new): Json<SettingsView>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let locked = |k: &str| ctx.env_locked.contains(&k);
-    let mut file = settings::read(&ctx.data_dir).map_err(|e| AppError::internal(e.to_string()))?;
+    let locked = |k: &str| ctx.locked(k);
+    let store = ctx.store();
+    let mut file = store.read_db().await.map_err(internal)?;
     let public_url = clean(new.public_url);
     if public_url
         .as_deref()
@@ -390,7 +425,7 @@ async fn put_settings(
             }
         };
     }
-    settings::write(&ctx.data_dir, &file).map_err(|e| AppError::internal(format!("{e:#}")))?;
+    store.write_db(&file).await.map_err(internal)?;
     tracing::info!("admin page changed settings; reloading");
     ctx.reload.trigger_soon();
     Ok(Json(json!({ "ok": true, "reloading": true })))
@@ -429,10 +464,19 @@ async fn change_password(
             ),
         ));
     }
+    if ctx.locked("admin_password_hash") {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "password_in_config_file",
+            "the admin password is set in config.toml, which overrides the database; remove \
+             admin_password_hash from it (or run `ourshell-server set-admin-password`)",
+        ));
+    }
     let new_hash = password::hash(&body.new).map_err(|e| AppError::internal(e.to_string()))?;
-    let mut file = settings::read(&ctx.data_dir).map_err(|e| AppError::internal(e.to_string()))?;
+    let store = ctx.store();
+    let mut file = store.read_db().await.map_err(internal)?;
     file.admin_password_hash = Some(new_hash);
-    settings::write(&ctx.data_dir, &file).map_err(|e| AppError::internal(format!("{e:#}")))?;
+    store.write_db(&file).await.map_err(internal)?;
     ctx.sessions.clear();
     ctx.reload.trigger_soon();
     Ok(Json(json!({ "ok": true })))

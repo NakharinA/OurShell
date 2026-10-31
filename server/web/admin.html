@@ -35,6 +35,7 @@
       <button type="button" role="tab" data-tab="users">Users</button>
       <button type="button" role="tab" data-tab="invites">Invites</button>
       <button type="button" role="tab" data-tab="settings">Settings</button>
+      <button type="button" role="tab" data-tab="backups">Backups</button>
     </nav>
 
     <section data-view="overview">
@@ -90,7 +91,7 @@
     <section data-view="settings" hidden>
       <form class="card" id="settings">
         <h2>Settings</h2>
-        <p class="lead">Saving applies changes immediately; the server reloads in place. Settings marked <span class="locked">set by environment</span> come from the container's environment variables and can only be changed there.</p>
+        <p class="lead">Saving applies changes immediately; the server reloads in place. Settings are stored, encrypted, in the database. Those marked <span class="locked">set by environment</span> come from the container's environment variables, and <span class="locked">set in config.toml</span> from the data directory's <code>config.toml</code>; change them there.</p>
         <label class="field" data-key="public_url"><span>Public URL</span><input name="public_url" type="url" placeholder="https://sync.example.com"></label>
         <label class="check" data-key="signups_enabled"><input name="signups_enabled" type="checkbox"> Allow new accounts</label>
         <label class="check" data-key="invite_only"><input name="invite_only" type="checkbox"> Require an invite code</label>
@@ -131,6 +132,58 @@
         <p class="note" id="password-msg" hidden></p>
         <div class="actions"><button type="submit">Change password</button></div>
       </form>
+    </section>
+
+    <section data-view="backups" hidden>
+      <div class="card">
+        <h2>Backup status</h2>
+        <dl class="kv">
+          <dt>Automatic backups</dt><dd id="b-enabled"></dd>
+          <dt>Last backup</dt><dd id="b-last"></dd>
+          <dt>Last check</dt><dd id="b-check"></dd>
+          <dt>Next check</dt><dd id="b-next"></dd>
+          <dt>Last error</dt><dd id="b-error"></dd>
+        </dl>
+        <p class="note" id="backup-run-msg" hidden></p>
+        <div class="actions"><button class="primary" type="button" id="backup-run">Back up now</button></div>
+      </div>
+
+      <form class="card" id="backup">
+        <h2>Encrypted backups to S3</h2>
+        <p class="lead">Backs up the whole server (database and configuration, including the master key) as one encrypted file to S3-compatible storage: AWS S3, Cloudflare R2, Backblaze B2, Wasabi, MinIO, Synology C2 and others. A check runs every few hours; when nothing changed, nothing is uploaded.</p>
+        <label class="check" data-key="backup_enabled"><input name="enabled" type="checkbox"> Back up automatically</label>
+        <label class="field" data-key="backup_endpoint"><span>Endpoint URL</span><input name="endpoint" type="url" placeholder="empty = AWS S3, e.g. https://&lt;account&gt;.r2.cloudflarestorage.com" spellcheck="false"></label>
+        <div class="row">
+          <label class="field" data-key="backup_bucket"><span>Bucket</span><input name="bucket" type="text" spellcheck="false"></label>
+          <label class="field" data-key="backup_region"><span>Region</span><input name="region" type="text" placeholder="us-east-1" spellcheck="false"><small>R2: <code>auto</code></small></label>
+          <label class="field" data-key="backup_prefix"><span>Folder (key prefix)</span><input name="prefix" type="text" placeholder="e.g. ourshell/" spellcheck="false"></label>
+        </div>
+        <div class="row">
+          <label class="field" data-key="backup_access_key_id"><span>Access key ID</span><input name="access_key_id" type="text" autocomplete="off" spellcheck="false"></label>
+          <label class="field" data-key="backup_secret_access_key"><span>Secret access key</span><input name="secret_access_key" type="password" autocomplete="off"><small id="backup-secret-hint"></small></label>
+        </div>
+        <label class="check" data-key="backup_path_style"><input name="path_style" type="checkbox"> Path-style addressing <small>(MinIO, Synology C2 and most self-hosted storage)</small></label>
+        <label class="field" data-key="backup_passphrase"><span>Backup passphrase</span><input name="passphrase" type="password" autocomplete="new-password"><small id="backup-pass-hint"></small></label>
+        <p class="note warn">Store the passphrase somewhere safe, away from this server. Without it, the backups can't be restored by anyone, including you.</p>
+        <div class="row">
+          <label class="field" data-key="backup_interval_hours"><span>Check every (hours)</span><input name="interval_hours" type="number" min="1"></label>
+          <label class="field" data-key="backup_keep"><span>Backups to keep</span><input name="keep" type="number" min="0"><small>0 = keep all</small></label>
+        </div>
+        <p class="note" id="backup-msg" hidden></p>
+        <div class="actions">
+          <button type="button" id="backup-test">Test connection</button>
+          <button class="primary" type="submit">Save backup settings</button>
+        </div>
+      </form>
+
+      <div class="card">
+        <h2>Backups in the bucket</h2>
+        <p class="lead">Restore one with <code>ourshell-server restore s3:&lt;key&gt;</code> (see the self-hosting guide).</p>
+        <p class="note" id="backup-list-msg" hidden></p>
+        <div class="table-wrap">
+          <table><thead><tr><th>File</th><th>Size</th><th>Uploaded</th></tr></thead><tbody id="backup-list"></tbody></table>
+        </div>
+      </div>
     </section>
   </div>
 

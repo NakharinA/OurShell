@@ -43,7 +43,7 @@
     <h2>Database</h2>
     <p class="lead">OurShell stores its data in PostgreSQL. Everything users sync is encrypted on their devices first, so the database only ever holds ciphertext.</p>
     <div id="db-env" hidden>
-      <p class="note info">The installer already configured the database: <b id="db-env-name"></b></p>
+      <p class="note info">The database comes from the server's environment (<code>DATABASE_URL</code>): <b id="db-env-name"></b></p>
     </div>
     <label class="field" id="db-input">
       <span>PostgreSQL URL</span>
@@ -51,10 +51,49 @@
       <small>The user needs permission to create tables. A <code>localhost</code> address means this container, not your computer; use <code>host.docker.internal</code> for a database on the Docker host.</small>
     </label>
     <p class="note" id="db-msg" hidden></p>
+
+    <div id="db-report" hidden>
+      <p class="note" id="db-summary"></p>
+      <div id="existing" hidden>
+        <dl class="kv" id="existing-facts"></dl>
+        <span class="lbl gap">What do you want to do with it?</span>
+        <div class="choice" role="radiogroup">
+          <label><input type="radio" name="existing" value="import" checked><span><b>Import existing data</b><small>Keep every account, device and synced item. Needs the master key of the server that created this data.</small></span></label>
+          <label><input type="radio" name="existing" value="clear"><span><b>Clear and start new</b><small>Delete all OurShell data in this database and set up a new server. Accounts and synced items are lost.</small></span></label>
+        </div>
+        <div id="import-box">
+          <p class="note ok" id="import-key-ok" hidden>The configured master key matches this database.</p>
+          <label class="field" id="import-key-field">
+            <span>Original master key</span>
+            <input id="import-key" type="password" autocomplete="off" spellcheck="false" placeholder="44 characters, ends with =">
+            <small>The <code>server_master_key</code> from the old server's <code>config.toml</code>, or its <code>SERVER_MASTER_KEY</code>.</small>
+          </label>
+          <div id="import-pw-box" hidden>
+            <p class="note info">This server has no admin password yet. Choose one for the <code>/admin</code> page.</p>
+            <div class="row">
+              <label class="field"><span>Admin password</span><input id="import-pw" type="password" autocomplete="new-password" minlength="10"></label>
+              <label class="field"><span>Confirm</span><input id="import-pw2" type="password" autocomplete="new-password" minlength="10"></label>
+            </div>
+          </div>
+          <p class="note" id="import-msg" hidden></p>
+          <div class="actions"><button type="button" class="primary" id="import-go">Import and finish</button></div>
+        </div>
+        <div id="clear-box" hidden>
+          <p class="note err"><b>This permanently deletes every OurShell table in this database</b>: accounts, devices, synced items, invites and settings. Other tables are left alone. Make a backup first if you might need it.</p>
+          <label class="field">
+            <span>Type <code>DELETE</code> to confirm</span>
+            <input id="clear-confirm" type="text" autocomplete="off" spellcheck="false" placeholder="DELETE">
+          </label>
+          <p class="note" id="clear-msg" hidden></p>
+          <div class="actions"><button type="button" class="danger" id="clear-go" disabled>Delete all OurShell data</button></div>
+        </div>
+      </div>
+    </div>
+
     <div class="actions">
       <button type="button" data-back>Back</button>
       <span class="grow"></span>
-      <button type="button" id="db-test">Test connection</button>
+      <button type="button" id="db-test">Check database</button>
       <button class="primary" type="submit" id="db-next" disabled>Continue</button>
     </div>
   </form>
@@ -115,12 +154,18 @@
 
   <section class="card" data-panel="5" hidden>
     <h2>Your server is ready</h2>
+    <p class="note ok" id="import-done" hidden></p>
+    <div id="persist-box" hidden>
+      <p class="note err"><b>This server will lose its master key on the next redeploy.</b> <span id="persist-why"></span> Without the key the database can't be read. Add these lines to the server's environment (for example the Environment tab in Dokploy) before you redeploy:</p>
+      <div id="env-lines"></div>
+      <div class="actions"><button type="button" id="copy-env">Copy all</button></div>
+    </div>
     <div id="key-box" hidden>
-      <p class="note warn"><b>Save this master key somewhere safe.</b> It encrypts this server's data at rest. Database backups can't be restored without it, and it's not shown again.</p>
+      <p class="note warn"><b>Save this master key somewhere safe.</b> It encrypts this server's data at rest. The database (and its backups) can't be read without it, and it's not shown again.</p>
       <div class="secret" id="master-key"></div>
       <div class="actions">
         <button type="button" id="copy-key">Copy key</button>
-        <button type="button" id="dl-config">Download config backup</button>
+        <button type="button" id="dl-config" hidden>Download config backup</button>
       </div>
     </div>
     <p class="note info" id="restart-msg">Starting the server…</p>

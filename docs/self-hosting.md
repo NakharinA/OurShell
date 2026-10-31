@@ -101,7 +101,13 @@ one-time **setup code** for you; it is also in `.env`
 
 1. **Setup code** -- proves you're the person who installed the server.
 2. **Database** -- already filled in (and locked) when the installer set
-   `DATABASE_URL`; otherwise enter a PostgreSQL URL and test it.
+   `DATABASE_URL`; otherwise enter a PostgreSQL URL and check it. The
+   wizard then shows what the database holds: empty (OurShell creates its
+   tables), another application's tables (a warning; OurShell adds its own
+   next to them), or **an existing OurShell server's data** (accounts,
+   devices, items, schema version, when the first account was created),
+   with two choices -- see
+   [Existing data: import or clear](#existing-data-import-or-clear).
 3. **Address** -- the URL clients will use, and how HTTPS is handled, one
    of three choices:
    - **plain HTTP** on your LAN or VPN (`http://<lan-ip>:8443`);
@@ -114,12 +120,23 @@ one-time **setup code** for you; it is also in `.env`
 4. **Sign-ups** -- open sign-ups, invite-only, or closed, and the
    per-account device limit.
 5. **Admin password** -- at least 10 characters, for the `/admin` page.
-6. **Master key** -- the wizard generates `SERVER_MASTER_KEY` and shows it
-   once, with a download of `config.toml`. **Save it somewhere safe**: a
-   database backup can't be restored without it.
+6. **Master key** -- unless `SERVER_MASTER_KEY` is set in the environment,
+   the wizard generates one and shows it once, with a download of
+   `config.toml`. **Save it somewhere safe**: the database (and any backup
+   of it) can't be read without it. If the data directory isn't a
+   persistent volume (no named volume or bind mount at `/data`, e.g. a
+   Dokploy or Kubernetes app without one -- the image's own anonymous
+   `/data` volume doesn't survive a redeploy), the last screen says so in red and shows
+   the exact `SERVER_MASTER_KEY=...` (and `DATABASE_URL=...`) lines to add
+   to the server's environment, with copy buttons; the server also logs a
+   warning at every start until the key is in the environment.
 
-The server then reloads into normal mode (`GET /v1/health` reports
-`"mode":"ready"` instead of `"setup"`). Point the desktop app or
+The wizard stores the settings (address, sign-up policy, admin password
+hash, ...) in the database, encrypted with the master key; `config.toml`
+only gets the database URL and the master key, and only when the
+environment doesn't provide them. The server then reloads into normal mode
+(`GET /v1/health` reports `"mode":"ready"` instead of `"setup"`; while it
+starts and waits for the database it reports `"starting"`). Point the desktop app or
 `ourshell account signup --server <address>` at it. The first account
 anyone registers automatically becomes the **owner** of the server's
 single org, regardless of the sign-up policy (there's no one else yet to
@@ -130,11 +147,14 @@ issue an invite). Every signup after that follows the normal policy.
 `http://<server>:8443/admin`, signed in with the admin password, lets you
 change the address, sign-up policy, device limit, OIDC and TLS settings
 (including "Behind a reverse proxy or ingress" and its trusted proxies),
-list users (disable/enable them), create invite codes, and change the admin
-password. Settings that come from environment variables are shown
-read-only. Forgot the password? Set a new one with
+list users (disable/enable them), create invite codes, set up encrypted
+backups to S3 (see [Backups](#backups)), and change the admin
+password. Changes are saved in the database. Settings that come from
+environment variables (or from `config.toml`) are shown read-only. Forgot
+the password? Set a new one with
 `docker exec -it ourshell-server ourshell-server set-admin-password`, then
-`docker restart ourshell-server`.
+`docker restart ourshell-server` (it writes to the database, so it needs
+the database URL and master key, from the environment or `config.toml`).
 
 ### Upgrade
 
@@ -162,9 +182,13 @@ cd /opt/ourshell && ./backup.sh       # -> backups/ourshell-<stamp>.sql.gz + con
 over `DATABASE_URL` for an existing database -- with a throwaway
 `postgres:17` container if the host has no `pg_dump`) and copies
 `/data/config.toml` out of the server container. **Keep both**: the dump
-alone can't be restored without the master key in `config.toml`. To copy
+(which also holds the server's settings, encrypted) can't be used without
+the master key in `config.toml` -- or in `SERVER_MASTER_KEY`, if that's
+where your server gets it (then `config.toml` may not exist). To copy
 it by hand: `docker cp ourshell-server:/data/config.toml .`. On Windows,
-run `backup.sh` from Git Bash or WSL. See "Backups" below for restoring.
+run `backup.sh` from Git Bash or WSL. See "Backups" below for restoring,
+and for the server's built-in, encrypted, scheduled backups to S3-compatible
+storage (no script or cron job needed).
 
 ### The Docker image
 
@@ -271,15 +295,82 @@ Notes:
 
 ### Where configuration comes from
 
-The setup wizard and the admin page write `config.toml` in the data
-directory (`/data` in the image, `$OURSHELL_DATA_DIR`). **Environment
-variables override it key by key**: anything set in the environment
-(`DATABASE_URL`, `SERVER_MASTER_KEY`, `PUBLIC_URL`, `SIGNUPS_ENABLED`, ...;
-see the table below) wins over `config.toml` and appears read-only on the
-admin page. Built-in defaults apply to whatever neither sets. So an
-installer-made server has `DATABASE_URL` from `.env` and everything else
-from the wizard, while an env-only deployment (below) never needs
-`config.toml` at all.
+Highest priority first:
+
+1. **Environment variables** (`DATABASE_URL`, `SERVER_MASTER_KEY`,
+   `PUBLIC_URL`, `SIGNUPS_ENABLED`, ...; see the table below). Shown
+   read-only on the admin page ("set by environment").
+2. **`config.toml`** in the data directory (`/data` in the image,
+   `$OURSHELL_DATA_DIR`). The setup wizard writes only `database_url` and
+   `server_master_key` there, and only when the environment doesn't set
+   them. Any other key you put there by hand overrides the database and
+   shows read-only on the admin page ("set in config.toml").
+3. **The database**: every other setting (address, sign-up policy, limits,
+   admin password hash, OIDC, TLS, proxy and backup settings), written by
+   the setup wizard and the admin page into the `server_settings` table,
+   encrypted with the master key -- so a stolen database dump doesn't leak
+   the admin password hash or the OIDC / S3 / backup secrets. The master
+   key itself is never stored in the database.
+4. Built-in defaults.
+
+Because the settings live in the database, a server whose environment has
+`DATABASE_URL` and `SERVER_MASTER_KEY` needs no persistent data directory
+at all: redeploy it with an empty `/data` and it starts straight into
+normal mode with all its settings. (The data directory still holds the
+Let's Encrypt certificates of the built-in HTTPS, the setup code and
+`backup-state.json`; only the certificates are worth keeping, so mount a
+volume if you use the built-in HTTPS.)
+
+**Upgrading from 0.8.x**, whose `config.toml` held every setting: on the
+first start the server moves the settings from `config.toml` into the
+database, rewrites `config.toml` with only the database URL / master key /
+bind address, and keeps the original as `config.toml.before-db-settings`
+(it logs what it moved). If the database already has settings (e.g.
+another replica migrated first), the file is left alone and its keys keep
+overriding the database (read-only on `/admin`) until you remove them.
+
+### What the server does at startup
+
+| Database URL (env / `config.toml`) | Database reachable? | Database holds | Master key | Result |
+| --- | --- | --- | --- | --- |
+| none | - | - | - | setup wizard |
+| set | no, after retrying for ~60 s | - | - | setup wizard showing the error (password redacted); retried every 10 s, and the server continues on its own once it connects |
+| set | yes | nothing of OurShell's | any | setup wizard, database step already done |
+| set | yes | an OurShell server's data | right | **normal mode**, no wizard |
+| set | yes | an OurShell server's data | missing | setup wizard: [import or clear](#existing-data-import-or-clear) |
+| set | yes | an OurShell server's data | wrong | same, with "the master key doesn't match this database" |
+
+The server never changes or clears existing data on its own. When the URL
+comes from the environment and the database can't be reached, the wizard
+can't change it: fix `DATABASE_URL` (or start the database) and the server
+picks it up within 10 seconds.
+
+### Existing data: import or clear
+
+When the wizard finds an OurShell server's data in the database (typically
+a redeploy that lost `/data` and with it the master key in `config.toml`,
+or a new server pointed at the old database), it offers:
+
+- **Import existing data** -- enter the **original master key** (the
+  field is skipped when a matching key is already in the environment or
+  `config.toml`). The wizard checks it against the database (it must
+  decrypt the stored OPAQUE server setup) and refuses a wrong one. All
+  accounts, devices, synced items and settings are kept; if the database
+  has no admin password yet (e.g. an env-only 0.8 server), it asks for
+  one. The other wizard steps are skipped.
+- **Clear and start new** -- deletes every OurShell table in that database
+  (accounts, devices, items, invites, settings; other applications' tables
+  are left alone), after you type `DELETE` to confirm. Then the normal
+  wizard continues: a new master key, settings and admin password.
+  Everyone has to sign up again. Clearing never touches the devices.
+
+**Lost the master key?** The data in the database can't be read without
+it: the at-rest encryption of synced items and two-factor secrets, the
+OPAQUE server setup that sign-ins depend on, and the settings are all
+encrypted with it. Restore the key from a backup of `config.toml` (or your
+password manager), or from an [S3 backup](#automatic-encrypted-backups-to-s3)
+(each backup file contains it). If it's really gone, choose **Clear and
+start new** and have everyone sign up again.
 
 ## What the server never sees
 
@@ -296,12 +387,13 @@ can never decrypt what the client encrypted.
 
 ## Configuration
 
-Every setting can come from `config.toml` (written by the setup wizard and
-`/admin`) or from an environment variable, which overrides the file (see
-"Where configuration comes from" above). See `.env.example` for the full,
-commented list and `server/src/config.rs` for how each is parsed. Until
-both a database URL and a master key are known, the server runs the setup
-wizard instead of the API.
+Every setting can come from an environment variable, from `config.toml`,
+or from the database (written by the setup wizard and `/admin`), in that
+order of priority (see "Where configuration comes from" above). See
+`.env.example` for the full, commented list and `server/src/config.rs` for
+how each is parsed. Until the server has a database with its data and the
+master key for it, it runs the setup wizard instead of the API (see "What
+the server does at startup").
 
 | Variable | Required | Default | Notes |
 | --- | --- | --- | --- |
@@ -325,10 +417,13 @@ wizard instead of the API.
 | `OURSHELL_TLS_EMAIL` | no | unset | contact email for the Let's Encrypt account |
 | `OURSHELL_TLS_BIND` | no | `0.0.0.0:8444` | where the built-in HTTPS listener binds |
 | `OURSHELL_ACME_STAGING` | no | `false` | `1`/`true`/`yes`/`on` = Let's Encrypt staging (untrusted test certificates) |
+| `OURSHELL_BACKUP_*` | no | off | encrypted backups to S3, see [Automatic encrypted backups to S3](#automatic-encrypted-backups-to-s3) |
 
 ### Generating `SERVER_MASTER_KEY`
 
-The setup wizard generates it for you. Only for an env-only deployment:
+The setup wizard generates it for you (and keeps it in `config.toml`). Set
+it in the environment yourself when the data directory isn't a persistent
+volume (Dokploy, Kubernetes, ...), so a redeploy can't lose it:
 
 ```sh
 openssl rand -base64 32
@@ -362,8 +457,8 @@ warning.
 - **/admin:** Settings → **Behind a reverse proxy or ingress**, plus the
   **Trusted proxies** list. Saving applies it immediately (the server
   reloads in place, no restart).
-- **Environment:** `OURSHELL_BEHIND_PROXY=true` (`behind_proxy` in
-  `config.toml`).
+- **Environment:** `OURSHELL_BEHIND_PROXY=true` (overrides the wizard /
+  /admin setting).
 - **Installer:** `--behind-proxy` (`-BehindProxy`), or choice 2 when it
   asks. Add `--listen 127.0.0.1` when the proxy runs directly on the same
   machine, so the plain-HTTP port is reachable only through the proxy.
@@ -379,8 +474,8 @@ a trusted proxy**:
   trusted proxy.
 - `X-Forwarded-Proto` -- `https` marks the /admin session cookie `Secure`.
 
-Trusted proxies come from `OURSHELL_TRUSTED_PROXIES` (`trusted_proxies` in
-`config.toml`; installer `--trusted-proxies`): a comma-separated list of
+Trusted proxies come from `OURSHELL_TRUSTED_PROXIES` (or /admin; installer
+`--trusted-proxies`): a comma-separated list of
 IPs and CIDRs, e.g. `10.0.0.0/8,192.168.1.5`. Unset, it is loopback plus
 the private ranges: `127.0.0.0/8`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`,
 `192.168.0.0/16`, `fc00::/7` -- which covers a proxy on the same host, in
@@ -547,12 +642,19 @@ Compose** project, then:
   Traefik answers **502 Bad Gateway**.
 - **Ports:** no published ports are needed; Traefik reaches the container
   over Dokploy's network.
-- **Environment:** `OURSHELL_BEHIND_PROXY=true` and
-  `PUBLIC_URL=https://your-domain`, plus `DATABASE_URL` (or enter it in the
-  setup wizard). Don't set `OURSHELL_TLS_DOMAIN`: Traefik owns the
-  certificate. Dokploy's network is a private range, which is trusted by
-  default.
-- **Volume:** mount a volume at `/data`.
+- **Environment:** `DATABASE_URL` and `SERVER_MASTER_KEY` (generate it
+  with `openssl rand -base64 32` and keep a copy) are all the server needs
+  to survive redeploys; everything else the wizard and `/admin` store in
+  the database. Add `OURSHELL_BEHIND_PROXY=true` and
+  `PUBLIC_URL=https://your-domain` (or pick "reverse proxy" in the wizard).
+  Don't set `OURSHELL_TLS_DOMAIN`: Traefik owns the certificate. Dokploy's
+  network is a private range, which is trusted by default.
+- **Volume:** not needed. Without `SERVER_MASTER_KEY` in the environment,
+  the wizard generates a key and keeps it in `/data/config.toml`, which a
+  redeploy without a volume loses -- the wizard's last screen then shows
+  the `SERVER_MASTER_KEY=...` line to add to the Environment tab. If that
+  already happened, the wizard finds the existing data after the
+  redeploy: [import it](#existing-data-import-or-clear) with the key.
 - **Docker Compose projects:** attach the server to Dokploy's network so
   Traefik can see it (otherwise 502 or 404):
 
@@ -848,6 +950,129 @@ for exact request/response shapes). Authenticated endpoints take
 
 ## Backups
 
+Two options, which can be combined:
+
+- **Automatic encrypted backups to S3** (below): built into the server,
+  set up on the admin page, nothing to schedule.
+- **`backup.sh`** (further below): a manual `pg_dump` + `config.toml` copy
+  to the local disk, for scripted or one-off backups.
+
+### Automatic encrypted backups to S3
+
+The server can back itself up to any S3-compatible object storage: AWS S3,
+Cloudflare R2, Backblaze B2, Wasabi, MinIO, Synology C2 Object Storage and
+most self-hosted stores. Open **/admin → Backups**, fill in the storage
+details and a backup passphrase, click **Test connection**, tick **Back up
+automatically** and save. **Back up now** makes one immediately.
+
+| Provider | Endpoint URL | Region | Path-style |
+| --- | --- | --- | --- |
+| AWS S3 | empty | the bucket's region, e.g. `eu-central-1` | off |
+| Cloudflare R2 | `https://<account-id>.r2.cloudflarestorage.com` | `auto` | off |
+| Backblaze B2 | `https://s3.<region>.backblazeb2.com` | e.g. `us-west-004` | off |
+| Wasabi | `https://s3.<region>.wasabisys.com` | e.g. `eu-central-1` | off |
+| MinIO / self-hosted | e.g. `http://nas.local:9000` | `us-east-1` unless configured | **on** |
+| Synology C2 Object Storage | the endpoint shown in C2 (e.g. `https://eu-002.s3.synologyc2.net`) | the region shown in C2 | **on** |
+
+Create a dedicated bucket (or a folder via the key prefix) and an access key
+that can list, read, write and delete objects in it. Then:
+
+- **What a backup is**: one file, `<prefix>ourshell-backup-<UTC
+  yyyymmddThhmmssZ>.osbk`, holding every table of the database (Postgres
+  `COPY`, CSV), the server's effective configuration (the settings from the
+  database, `config.toml` and environment overrides, *including the master
+  key*, so this one file restores everything) and a manifest (format, server version, time,
+  database migration versions, row counts). It is gzip-compressed and then
+  encrypted with XChaCha20-Poly1305 under a key derived from your backup
+  passphrase with Argon2id; only a small header (format marker, salt,
+  Argon2 parameters, nonce) is readable without the passphrase.
+- **The passphrase is everything.** Store it in a password manager or
+  somewhere else away from the server. **If you lose it, the backups are
+  useless**: nobody, including the OurShell developers, can decrypt them.
+  Changing it later only affects new backups; keep the old one for older
+  files.
+- **Schedule**: the first check runs about 2 minutes after the server
+  starts (or the settings are saved), then every *Check every (hours)*
+  (default 24). A check compares a SHA-256 of the data with the last
+  uploaded backup and **uploads nothing when nothing changed** (shown as
+  "unchanged — skipped"). Sign-in churn doesn't count as a change: rows in
+  `sessions`, `events` (the audit log) and short-lived protocol tables are
+  still included in each backup, but alone they don't trigger a new one.
+  **Back up now** always uploads.
+- **Retention**: after each upload, all but the newest *Backups to keep*
+  (default 30, `0` = keep all) `ourshell-backup-*.osbk` files under the
+  prefix are deleted. Other objects in the bucket are never touched.
+- **Status** (last backup, last check and its result, last error, next
+  check) is on the Backups tab and in `backup-state.json` in the data
+  directory.
+
+All settings can also come from the environment (they then show read-only
+on the admin page):
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `OURSHELL_BACKUP_ENABLED` | `false` | scheduled backups on/off |
+| `OURSHELL_BACKUP_S3_ENDPOINT` | AWS S3 | `https://...` or `http://...` |
+| `OURSHELL_BACKUP_S3_REGION` | `us-east-1` | |
+| `OURSHELL_BACKUP_S3_BUCKET` | - | |
+| `OURSHELL_BACKUP_S3_PREFIX` | empty | "folder" in the bucket, e.g. `ourshell/` |
+| `OURSHELL_BACKUP_S3_ACCESS_KEY_ID` / `OURSHELL_BACKUP_S3_SECRET_ACCESS_KEY` | - | |
+| `OURSHELL_BACKUP_S3_PATH_STYLE` | `false` | `true` for MinIO, Synology C2 and most self-hosted stores |
+| `OURSHELL_BACKUP_PASSPHRASE` | - | at least 12 characters |
+| `OURSHELL_BACKUP_INTERVAL_HOURS` | `24` | |
+| `OURSHELL_BACKUP_KEEP` | `30` | `0` = keep all; `backup.sh` reads the same variable for its local copies |
+
+#### Restoring an S3 backup
+
+`ourshell-server restore` decrypts a backup, checks it, migrates the target
+database to this server's version and replaces **all** its data with the
+backup's in one transaction, then restores the backup's configuration:
+the settings into the database (encrypted with the backup's master key),
+the master key and database URL into `config.toml` in the data directory
+(the previous file is kept as `config.toml.before-restore`; keys your
+environment sets are left out of the file, since the environment wins
+anyway). If the data directory isn't a persistent volume and
+`SERVER_MASTER_KEY` isn't in the environment, it prints the
+`SERVER_MASTER_KEY=...` line to add there. It refuses a backup made by a
+newer server version; upgrade first. Backups from older versions restore
+fine.
+
+```sh
+# Straight from the bucket (uses this server's backup settings from /admin,
+# or the OURSHELL_BACKUP_S3_* variables); `s3:latest` picks the newest file.
+docker exec -it ourshell-server ourshell-server restore s3:latest --dry-run   # decrypt + show the manifest only
+docker exec -it ourshell-server ourshell-server restore s3:latest
+docker restart ourshell-server
+
+# Or from a downloaded file:
+docker cp ourshell-backup-20261101T020000Z.osbk ourshell-server:/tmp/
+docker exec -it ourshell-server ourshell-server restore /tmp/ourshell-backup-20261101T020000Z.osbk
+docker restart ourshell-server
+```
+
+The passphrase comes from `OURSHELL_BACKUP_PASSPHRASE` / this server's
+backup settings, or is asked for. The database is the one in `DATABASE_URL` if set,
+otherwise the one in the backup's configuration. If `SERVER_MASTER_KEY` is
+set in the environment it must match the backup's (restore stops otherwise:
+the data couldn't be decrypted). `s3:KEY` takes a key as listed on the
+Backups tab (with or without the prefix).
+
+On a brand-new machine: install the server as usual (the installer or the
+compose file), then before or instead of finishing the setup wizard run the
+restore command above with the storage settings passed as environment
+variables (`docker exec -e OURSHELL_BACKUP_S3_BUCKET=... -e ...`), or with a
+downloaded file, and restart.
+
+**Downloading a backup by hand**: every provider's web console can download
+an object: open the bucket (AWS S3 console, Cloudflare dashboard → R2,
+Backblaze → Buckets → Browse files, Wasabi console, the MinIO console,
+Synology C2 Object Storage → Buckets), browse to the prefix and download the
+`ourshell-backup-<stamp>.osbk` you want. Any S3 tool works too, e.g.
+`aws s3 cp s3://<bucket>/<prefix>ourshell-backup-<stamp>.osbk . --endpoint-url <endpoint>`
+or `rclone copy`.
+
+### Manual backups with backup.sh
+
 ```sh
 ./backup.sh                    # in an installer-made install dir
 ./scripts/backup.sh            # in a repo checkout (the manual compose stack)
@@ -898,17 +1123,22 @@ docker compose logs server        # shows the setup code
 - **`SERVER_MASTER_KEY` left empty:** the server starts in setup mode. Open
   `http://<host>:8443/setup` and the wizard generates the key into
   `config.toml` in the `ourshell-data` volume.
-- **`SERVER_MASTER_KEY` set:** together with `DATABASE_URL`, the server starts
-  straight in normal mode. Every setting the variables pin shows read-only on
-  `/admin`. Set the admin password with
-  `docker compose exec server ourshell-server set-admin-password`, then
-  restart the server.
+- **`SERVER_MASTER_KEY` set:** together with `DATABASE_URL`, the volume isn't
+  needed for the key. On an empty database the wizard runs once (with the
+  database and key steps already done) for the address, sign-up policy and
+  admin password; after that, and for a database with existing data, the
+  server starts straight in normal mode. Every setting the variables pin
+  shows read-only on `/admin`. To skip the wizard entirely, set the admin
+  password before the first start:
+  `docker compose run --rm server set-admin-password` (it creates the
+  tables and stores the password in the database).
 
 ## Running multiple replicas
 
 The server keeps no state in process memory except the (configurable)
 per-IP rate limiter -- sessions, OPAQUE protocol state, and the OPAQUE
-server setup itself all live in Postgres -- so you can run several
+server setup itself all live in Postgres, and so do the settings from the
+wizard and /admin -- so you can run several
 replicas behind a load balancer with no sticky sessions required, as long
 as they share one `DATABASE_URL` and `SERVER_MASTER_KEY`. Only the rate
 limiter is per-replica (acceptable: worst case a client gets a slightly

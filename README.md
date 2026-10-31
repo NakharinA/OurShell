@@ -16,6 +16,7 @@ Secrets are always encrypted on the client before they reach the server. See [th
 - **SFTP, port forwarding and snippets**: browse and transfer files, local/remote forwards, run saved commands on one or many hosts.
 - **Encrypted vault**: everything lives in a local vault encrypted with your master password (Argon2id + XChaCha20-Poly1305), with a recovery phrase.
 - **Sync across computers**: an optional self-hosted server that only ever stores ciphertext. Team vaults let you share hosts with other people.
+- **Server backups**: the sync server backs itself up on a schedule, encrypted with your passphrase, to any S3-compatible storage (AWS S3, R2, B2, Wasabi, MinIO, Synology C2), and skips the upload when nothing changed.
 - **AI with approval**: an MCP server lets AI assistants list and use hosts you opt in, with every action approved by you in the app or CLI.
 - **Imports**: `~/.ssh/config` and Termius CSV.
 
@@ -80,7 +81,7 @@ irm https://github.com/NakharinA/OurShell/releases/latest/download/install-serve
 
 The installer starts the server (with its own PostgreSQL, or one you already have) and prints a link to finish setup in your browser:
 
-- **Setup wizard** (`/setup`): checks the database, generates the server's master key (save it), sets who can sign up and an admin password.
+- **Setup wizard** (`/setup`): checks the database (and offers to import or clear an existing OurShell server's data), generates the server's master key (save it), sets who can sign up and an admin password. Settings are stored encrypted in the database, so redeploys keep them.
 - **Admin page** (`/admin`): status, settings, invite codes and users.
 - **HTTPS**: optional built-in Let's Encrypt certificate, or put it behind your own reverse proxy.
 
@@ -98,7 +99,7 @@ No script needed: the server is one public image for amd64 and arm64 that any Do
 | Password | none: the image is public |
 | Port | `8443` (HTTP); optional built-in HTTPS on `8444`, published as `3000` by default (forward public TCP 443 to it for Let's Encrypt) |
 | Behind a reverse proxy / ingress | set `OURSHELL_BEHIND_PROXY=true` (and `PUBLIC_URL=https://...`), publish only `8443`; the proxy handles HTTPS ([setup](docs/self-hosting.md#behind-a-reverse-proxy-or-ingress)) |
-| Volume | a named volume at `/data` (configuration and master key) |
+| Volume | a named volume at `/data` (holds the master key), or none if you set `SERVER_MASTER_KEY` in the environment: all other settings live in the database |
 | Database | PostgreSQL: set `DATABASE_URL`, or enter it in the setup wizard |
 
 If a tool insists on credentials for a registry (some do when you add `ghcr.io` as a registry), use any GitHub username and a [personal access token](https://github.com/settings/tokens) with only the `read:packages` scope, never your GitHub password.
