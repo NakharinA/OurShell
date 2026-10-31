@@ -129,7 +129,7 @@ issue an invite). Every signup after that follows the normal policy.
 
 `http://<server>:8443/admin`, signed in with the admin password, lets you
 change the address, sign-up policy, device limit, OIDC and TLS settings
-(including the "behind a reverse proxy" toggle),
+(including "Behind a reverse proxy or ingress" and its trusted proxies),
 list users (disable/enable them), create invite codes, and change the admin
 password. Settings that come from environment variables are shown
 read-only. Forgot the password? Set a new one with
@@ -357,8 +357,11 @@ warning.
 
 ### Turning it on
 
-- **Setup wizard:** choose "behind a reverse proxy or ingress" in the
-  Address step. **/admin:** the "behind a reverse proxy" toggle.
+- **Setup wizard:** in the Address step, under "How is it reached over
+  HTTPS?", choose **Through my reverse proxy or ingress**.
+- **/admin:** Settings → **Behind a reverse proxy or ingress**, plus the
+  **Trusted proxies** list. Saving applies it immediately (the server
+  reloads in place, no restart).
 - **Environment:** `OURSHELL_BEHIND_PROXY=true` (`behind_proxy` in
   `config.toml`).
 - **Installer:** `--behind-proxy` (`-BehindProxy`), or choice 2 when it
