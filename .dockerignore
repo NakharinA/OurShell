@@ -1,11 +1,19 @@
+# Build context for server/Dockerfile (the workspace root).
+# Do NOT exclude assets/ or server/web/: the server binary embeds them
+# with include_str!.
 target/
 **/target/
-.git/
+# `.git` is a directory in a clone but a file in a git worktree.
+.git
 .github/
 .claude/
 apps/
 node_modules/
 dist/
+design/
+backups/
+# Local server state (OURSHELL_DATA_DIR defaults to ./data outside Docker).
+data/
 *.db
 *.sqlite
 .env

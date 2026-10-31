@@ -41,6 +41,22 @@ The CLI starts a local agent (`ourshell agent`) on demand. It holds the unlocked
 vault, auto-locks after 15 idle minutes, and exits when idle and locked. The
 desktop app and the MCP server talk to the same agent.
 
+## Self-host the sync server
+
+On a Linux server, a Synology NAS or a Mac with Docker:
+
+```sh
+curl -fsSL https://github.com/NakharinA/OurShell/releases/latest/download/install-server.sh | sh
+```
+
+On Windows with Docker Desktop (PowerShell):
+
+```powershell
+irm https://github.com/NakharinA/OurShell/releases/latest/download/install-server.ps1 | iex
+```
+
+The installer starts the server (with its own PostgreSQL, or one you already have) and prints a link to a setup wizard in your browser. Re-run it to upgrade. See [`docs/self-hosting.md`](docs/self-hosting.md) for options, backups and running it by hand.
+
 ## Installing on macOS
 
 Release builds aren't notarized by Apple yet, so the first launch is blocked:

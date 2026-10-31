@@ -1,11 +1,20 @@
-# OurShell self-hosted sync server. See docs/self-hosting.md.
+# OurShell self-hosted sync server -- developer / build-from-source setup.
 #
-#   cp .env.example .env   # fill in SERVER_MASTER_KEY, POSTGRES_PASSWORD, ...
-#   docker compose up -d
+# Just want to run a server? Use the installer instead, which pulls the
+# published image (ghcr.io/nakharina/ourshell-server) and sets everything up:
 #
-# This same image scales to a company deployment by changing the .env file
-# (SIGNUPS_ENABLED, INVITE_ONLY, OIDC_*, an external DATABASE_URL, ...), not
-# the code.
+#   curl -fsSL https://github.com/NakharinA/OurShell/releases/latest/download/install-server.sh | sh
+#
+# This file builds the image from this checkout (or `docker compose pull`
+# fetches the published one instead). See docs/self-hosting.md.
+#
+#   cp .env.example .env   # set POSTGRES_PASSWORD (everything else optional)
+#   docker compose up -d --build
+#
+# Then open http://localhost:8443/setup and enter the setup code from
+# `docker compose logs server`. The wizard generates SERVER_MASTER_KEY and
+# writes config.toml into the ourshell-data volume; anything set in .env
+# below overrides the wizard's settings.
 
 services:
   postgres:
@@ -24,6 +33,7 @@ services:
       retries: 10
 
   server:
+    image: ghcr.io/nakharina/ourshell-server:latest
     build:
       context: .
       dockerfile: server/Dockerfile
@@ -34,7 +44,9 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgres://ourshell:${POSTGRES_PASSWORD}@postgres:5432/ourshell}
       BIND_ADDR: 0.0.0.0:8443
-      SERVER_MASTER_KEY: ${SERVER_MASTER_KEY:?set SERVER_MASTER_KEY in .env (openssl rand -base64 32)}
+      # Optional: the setup wizard generates one (stored in config.toml) when
+      # this is empty. Set it (openssl rand -base64 32) for env-only deploys.
+      SERVER_MASTER_KEY: ${SERVER_MASTER_KEY:-}
       OPAQUE_SERVER_SETUP: ${OPAQUE_SERVER_SETUP:-}
       SIGNUPS_ENABLED: ${SIGNUPS_ENABLED:-true}
       INVITE_ONLY: ${INVITE_ONLY:-false}
@@ -46,8 +58,11 @@ services:
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL:-}
       RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ourshell-data:/data
     ports:
       - "${OURSHELL_PORT:-8443}:8443"
 
 volumes:
   ourshell-postgres-data:
+  ourshell-data:
