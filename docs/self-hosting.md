@@ -1,24 +1,169 @@
 # Self-hosting the OurShell sync server
 
 One Docker Compose stack runs the whole server for a single person; the
-same image scales to a small company by changing environment variables,
-not code. See the project plan's "Self-hosting for individuals and
-companies" section for the design goals, and `docs/threat-model.md` for
-what the server can and can't see.
+same image scales to a small company by changing settings, not code. See
+the project plan's "Self-hosting for individuals and companies" section for
+the design goals, and `docs/threat-model.md` for what the server can and
+can't see.
 
 ## Quick start
 
+You need Docker (on Linux the installer can install it for you; on a
+Synology NAS install **Container Manager** from the Package Center; on
+Windows and macOS install Docker Desktop). Then run one command on the
+machine that will host the server.
+
+**Linux, Synology DSM, macOS**
+
 ```sh
-cp .env.example .env
-# Fill in SERVER_MASTER_KEY (openssl rand -base64 32) and POSTGRES_PASSWORD.
-docker compose up -d
-curl http://localhost:8443/v1/health
+curl -fsSL https://github.com/NakharinA/OurShell/releases/latest/download/install-server.sh | sh
 ```
 
-The first account anyone registers automatically becomes the **owner** of
-the server's single org, regardless of `SIGNUPS_ENABLED`/`INVITE_ONLY`
-(there's no one else yet to issue an invite). Every signup after that
-follows the normal policy.
+**Windows (PowerShell, Docker Desktop)**
+
+```powershell
+irm https://github.com/NakharinA/OurShell/releases/latest/download/install-server.ps1 | iex
+```
+
+The installer asks a few questions (each has a flag, see below), then:
+
+1. writes `docker-compose.yml`, `.env` (secrets, readable only by you) and
+   `backup.sh` into the install directory -- `/opt/ourshell` on Linux,
+   `/volume1/docker/ourshell` on Synology, `~/ourshell` on macOS,
+   `%ProgramData%\OurShell` on Windows;
+2. starts the server and, unless you chose an existing database, a
+   PostgreSQL 17 container with a random password;
+3. waits until the server is healthy and prints the setup address, e.g.
+   `http://192.168.1.20:8443/setup#code=7K3M-Q9TR-2XWD-H4NB`.
+
+It needs root on Linux (for `/opt`) and on Synology (for Docker), and
+re-runs itself with `sudo` when needed -- on Linux you can instead pick a
+directory under your home.
+
+### Installer options
+
+Pass options after `sh -s --` when piping (`curl ... | sh -s -- --yes --db new`),
+or as PowerShell parameters (`& ([scriptblock]::Create((irm <url>))) -Yes -Db new`).
+
+| sh | PowerShell | Meaning |
+| --- | --- | --- |
+| `--yes` | `-Yes` | accept defaults, never prompt (required without a terminal) |
+| `--dir DIR` | `-Dir DIR` | install directory |
+| `--db new\|existing` | `-Db new\|existing` | bundled PostgreSQL (default) or your own |
+| `--database-url URL` | `-DatabaseUrl URL` | with `existing`: `postgres://user:pw@host:5432/db` |
+| `--port N` | `-Port N` | host port for HTTP (default `8443`) |
+| `--domain D` / `--email E` | `-Domain D` / `-Email E` | HTTPS with a Let's Encrypt certificate on port 443 |
+| `--public-url URL` | `-PublicUrl URL` | the address clients use |
+| `--image REF` | `-Image REF` | a different server image |
+| `--project NAME` | `-Project NAME` | Docker Compose project name (default `ourshell`) |
+| `--upgrade` | `-Upgrade` | upgrade an existing install |
+| `--uninstall [--purge]` | `-Uninstall [-Purge]` | remove the containers (and, with purge, all data) |
+
+With an **existing database**, a `localhost`/`127.0.0.1`/`::1` host in the
+URL is rewritten to `host.docker.internal` (the server runs in a
+container), so PostgreSQL must listen on an address containers can reach
+(`listen_addresses`, `pg_hba.conf`). The role needs `CREATE` on that
+database: the server creates its own tables. The installer checks the
+connection with a throwaway `postgres:17` container before it starts.
+
+For HTTPS (`--domain`), see the "HTTPS with Let's Encrypt" section. On
+Synology, DSM's own web server normally holds port 443.
+
+### The setup wizard
+
+Open the printed address in a browser. The `#code=` part fills in the
+one-time **setup code** for you; it is also in `.env`
+(`OURSHELL_SETUP_CODE`) and in the server log
+(`docker compose logs server`). The wizard walks through:
+
+1. **Setup code** -- proves you're the person who installed the server.
+2. **Database** -- already filled in (and locked) when the installer set
+   `DATABASE_URL`; otherwise enter a PostgreSQL URL and test it.
+3. **Address** -- the URL clients will use (`https://sync.example.com`,
+   or `http://<lan-ip>:8443` at home), and optionally a domain for
+   Let's Encrypt.
+4. **Sign-ups** -- open sign-ups, invite-only, or closed, and the
+   per-account device limit.
+5. **Admin password** -- at least 10 characters, for the `/admin` page.
+6. **Master key** -- the wizard generates `SERVER_MASTER_KEY` and shows it
+   once, with a download of `config.toml`. **Save it somewhere safe**: a
+   database backup can't be restored without it.
+
+The server then reloads into normal mode (`GET /v1/health` reports
+`"mode":"ready"` instead of `"setup"`). Point the desktop app or
+`ourshell account signup --server <address>` at it. The first account
+anyone registers automatically becomes the **owner** of the server's
+single org, regardless of the sign-up policy (there's no one else yet to
+issue an invite). Every signup after that follows the normal policy.
+
+### The admin page
+
+`http://<server>:8443/admin`, signed in with the admin password, lets you
+change the address, sign-up policy, device limit, OIDC and TLS settings,
+list users (disable/enable them), create invite codes, and change the admin
+password. Settings that come from environment variables are shown
+read-only. Forgot the password? Set a new one with
+`docker exec -it ourshell-server ourshell-server set-admin-password`, then
+`docker restart ourshell-server`.
+
+### Upgrade
+
+Re-run the installer (the same one-liner): it finds the existing install
+and offers to upgrade -- pull the new image, restart, wait for health.
+Your data, `.env` and `config.toml` are kept. Non-interactively: add
+`--upgrade --yes` (`-Upgrade -Yes`). Or by hand, in the install directory:
+set `OURSHELL_IMAGE` in `.env` to the new tag, then
+`docker compose pull && docker compose up -d`.
+
+### Uninstall
+
+`--uninstall` (`-Uninstall`) stops and removes the containers but keeps the
+data volumes and the install directory, so re-running the installer brings
+everything back. `--uninstall --purge` also deletes the volumes (database,
+`config.toml`) and the install directory -- make a backup first.
+
+### Backup and restore
+
+```sh
+cd /opt/ourshell && ./backup.sh       # -> backups/ourshell-<stamp>.sql.gz + config-<stamp>.toml
+```
+
+`backup.sh` dumps the database (from the bundled `postgres` container, or
+over `DATABASE_URL` for an existing database -- with a throwaway
+`postgres:17` container if the host has no `pg_dump`) and copies
+`/data/config.toml` out of the server container. **Keep both**: the dump
+alone can't be restored without the master key in `config.toml`. To copy
+it by hand: `docker cp ourshell-server:/data/config.toml .`. On Windows,
+run `backup.sh` from Git Bash or WSL. See "Backups" below for restoring.
+
+### The Docker image
+
+Release images are published to the GitHub Container Registry as
+`ghcr.io/nakharina/ourshell-server:<version>` (and `:latest`). The image
+serves HTTP on port 8443 (HTTPS on 8444 when a TLS domain is configured),
+keeps its state in `/data`, runs as a non-root user and has a built-in
+health check. Without the installer:
+
+```sh
+docker volume create ourshell-data
+docker run -d --name ourshell-server --restart unless-stopped \
+  -p 8443:8443 -v ourshell-data:/data \
+  -e DATABASE_URL=postgres://ourshell:secret@db.example.com:5432/ourshell \
+  ghcr.io/nakharina/ourshell-server:latest
+docker logs ourshell-server     # prints the setup code; then open http://<host>:8443/setup
+```
+
+### Where configuration comes from
+
+The setup wizard and the admin page write `config.toml` in the data
+directory (`/data` in the image, `$OURSHELL_DATA_DIR`). **Environment
+variables override it key by key**: anything set in the environment
+(`DATABASE_URL`, `SERVER_MASTER_KEY`, `PUBLIC_URL`, `SIGNUPS_ENABLED`, ...;
+see the table below) wins over `config.toml` and appears read-only on the
+admin page. Built-in defaults apply to whatever neither sets. So an
+installer-made server has `DATABASE_URL` from `.env` and everything else
+from the wizard, while an env-only deployment (below) never needs
+`config.toml` at all.
 
 ## What the server never sees
 
@@ -35,14 +180,22 @@ can never decrypt what the client encrypted.
 
 ## Configuration
 
-All configuration is environment variables; see `.env.example` for the
-full, commented list and `server/src/config.rs` for how each is parsed.
+Every setting can come from `config.toml` (written by the setup wizard and
+`/admin`) or from an environment variable, which overrides the file (see
+"Where configuration comes from" above). See `.env.example` for the full,
+commented list and `server/src/config.rs` for how each is parsed. Until
+both a database URL and a master key are known, the server runs the setup
+wizard instead of the API.
 
 | Variable | Required | Default | Notes |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | yes | - | Postgres connection string |
+| `DATABASE_URL` | unless set in the wizard | - | Postgres connection string |
 | `BIND_ADDR` | no | `0.0.0.0:8443` | |
-| `SERVER_MASTER_KEY` | yes | - | base64, 32 random bytes |
+| `SERVER_MASTER_KEY` | unless set in the wizard | generated by the wizard | base64, 32 random bytes |
+| `PUBLIC_URL` | no | unset | address clients use |
+| `OURSHELL_DATA_DIR` | no | `/data` in the image, `./data` otherwise | where `config.toml` lives |
+| `OURSHELL_SETUP_CODE` | no | generated, printed in the log | one-time code for `/setup` (the installer sets it) |
+| `OURSHELL_TLS_DOMAIN` / `OURSHELL_TLS_EMAIL` | no | unset | HTTPS via Let's Encrypt, see "HTTPS with Let's Encrypt" |
 | `OPAQUE_SERVER_SETUP` | no | generated once, persisted encrypted in `server_setup` | only set by hand to restore one explicitly |
 | `SIGNUPS_ENABLED` | no | `true` | |
 | `INVITE_ONLY` | no | `false` | |
@@ -56,6 +209,8 @@ full, commented list and `server/src/config.rs` for how each is parsed.
 | `OURSHELL_ACME_STAGING` | no | `false` | `1`/`true`/`yes`/`on` = Let's Encrypt staging (untrusted test certificates) |
 
 ### Generating `SERVER_MASTER_KEY`
+
+The setup wizard generates it for you. Only for an env-only deployment:
 
 ```sh
 openssl rand -base64 32
@@ -292,14 +447,57 @@ for exact request/response shapes). Authenticated endpoints take
 ## Backups
 
 ```sh
-./scripts/backup.sh            # writes ./backups/ourshell-<timestamp>.sql.gz
+./backup.sh                    # in an installer-made install dir
+./scripts/backup.sh            # in a repo checkout (the manual compose stack)
+# both write backups/ourshell-<timestamp>.sql.gz and backups/config-<timestamp>.toml
 ```
 
+`backup.sh` works in `$OURSHELL_DIR`, else its own directory when that has
+a `docker-compose.yml` and `.env`, else the repository root. It keeps the
+last 14 backups (`OURSHELL_BACKUP_KEEP`, `0` = keep all).
+
 Backups are a `pg_dump` of ciphertext, public keys and sync metadata (see
-above); restoring is a normal `pg_restore`/`psql` import, documented in the
-script's header. Keep backups anyway as if they were sensitive: they still
-contain enough to impersonate OPAQUE records and sessions if someone steals
-one.
+above), plus `config.toml`, which holds `SERVER_MASTER_KEY`: without that
+key the restored `items.envelope`/`totp.secret` columns can't be read.
+Keep backups as if they were sensitive: they still contain enough to
+impersonate OPAQUE records and sessions if someone steals one.
+
+To restore into a fresh install with the bundled database (empty volume):
+
+```sh
+gunzip -c backups/ourshell-<stamp>.sql.gz | docker compose exec -T postgres psql -U ourshell -d ourshell
+docker exec -i ourshell-server sh -c 'umask 077; cat > /data/config.toml' < backups/config-<stamp>.toml
+docker compose restart server
+```
+
+(`docker exec` writes the file as the server's own non-root user; a
+`docker cp` into the container leaves it owned by root, which the server
+can't read when the file is mode 600, as `backup.sh` writes it.)
+
+For an existing database, import the dump with `psql "$DATABASE_URL"`
+instead. If the server isn't set up yet when you copy `config.toml` in,
+the restart skips the wizard.
+
+## Advanced: manual docker compose
+
+The repository's own `docker-compose.yml` builds the server from source and
+configures it entirely through environment variables -- no wizard, no
+`config.toml` needed:
+
+```sh
+cp .env.example .env
+# Fill in SERVER_MASTER_KEY (openssl rand -base64 32) and POSTGRES_PASSWORD.
+docker compose up -d
+curl http://localhost:8443/v1/health
+```
+
+Because both `DATABASE_URL` and `SERVER_MASTER_KEY` come from the
+environment, the server starts straight in normal mode, and every setting
+the variables pin shows read-only on `/admin`. To use the `/admin` page,
+mount a volume at `/data` (so `config.toml` survives re-creating the
+container) and set its password with
+`docker compose exec server ourshell-server set-admin-password`, then
+restart the server.
 
 ## Running multiple replicas
 
