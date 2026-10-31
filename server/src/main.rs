@@ -4,7 +4,7 @@ async fn main() -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         None | Some("serve") => ourshell_server::run().await,
         Some("healthcheck") => ourshell_server::healthcheck().await,
-        Some("set-admin-password") => ourshell_server::set_admin_password(),
+        Some("set-admin-password") => ourshell_server::set_admin_password().await,
         Some("restore") => ourshell_server::backup::restore::run_cli(&args[1..]).await,
         Some(other) => {
             eprintln!(

@@ -157,11 +157,19 @@ $("#invite-new").addEventListener("click", async (e) => {
   }
 });
 
+// Keys set by the environment or config.toml: shown read-only.
 let envLocked = [];
 
+/** "set by environment" / "set in config.toml" for a locked key, else null. */
+function lockLabel(env, file, matches) {
+  if (env.some(matches)) return " · set by environment";
+  if (file.some(matches)) return " · set in config.toml";
+  return null;
+}
+
 async function loadSettings() {
-  const { settings: s, env_locked } = await api("/admin/api/settings");
-  envLocked = env_locked;
+  const { settings: s, env_locked, file_locked = [] } = await api("/admin/api/settings");
+  envLocked = env_locked.concat(file_locked);
   const form = $("#settings");
   for (const input of $$("input", form)) {
     const v = s[input.name];
@@ -172,12 +180,10 @@ async function loadSettings() {
   $("#oidc-secret-hint").textContent = s.oidc_secret_set ? "Saved. Leave empty to keep it." : "";
   for (const wrap of $$("[data-key]", form)) {
     const key = wrap.dataset.key;
-    const locked = env_locked.includes(key) || (key.startsWith("tls_") && env_locked.some((k) => k.startsWith("tls_")));
-    for (const input of $$("input", wrap)) input.disabled = locked;
-    let tag = $(".locked", wrap);
-    if (locked && !tag) {
-      tag = el("span", { class: "locked" }, " · set by environment");
-      (wrap.querySelector("span") || wrap).append(tag);
+    const label = lockLabel(env_locked, file_locked, (k) => k === key || (key.startsWith("tls_") && k.startsWith("tls_")));
+    for (const input of $$("input", wrap)) input.disabled = !!label;
+    if (label && !$(".locked", wrap)) {
+      (wrap.querySelector("span") || wrap).append(el("span", { class: "locked" }, label));
     }
   }
   syncProxyFields();
@@ -267,7 +273,7 @@ function showBackupStatus(st) {
 }
 
 async function loadBackups() {
-  const { settings: s, env_locked, status, min_passphrase_len } = await api("/admin/api/backup");
+  const { settings: s, env_locked, file_locked = [], status, min_passphrase_len } = await api("/admin/api/backup");
   const form = $("#backup");
   for (const input of $$("input", form)) {
     const v = s[input.name];
@@ -281,10 +287,10 @@ async function loadBackups() {
     ? "Saved. Leave empty to keep it."
     : `At least ${min_passphrase_len} characters.`;
   for (const wrap of $$("[data-key]", form)) {
-    const locked = env_locked.includes(wrap.dataset.key);
-    for (const input of $$("input", wrap)) input.disabled = locked;
-    if (locked && !$(".locked", wrap)) {
-      (wrap.querySelector("span") || wrap).append(el("span", { class: "locked" }, " · set by environment"));
+    const label = lockLabel(env_locked, file_locked, (k) => k === wrap.dataset.key);
+    for (const input of $$("input", wrap)) input.disabled = !!label;
+    if (label && !$(".locked", wrap)) {
+      (wrap.querySelector("span") || wrap).append(el("span", { class: "locked" }, label));
     }
   }
   showBackupStatus(status);

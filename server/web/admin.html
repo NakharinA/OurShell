@@ -91,7 +91,7 @@
     <section data-view="settings" hidden>
       <form class="card" id="settings">
         <h2>Settings</h2>
-        <p class="lead">Saving applies changes immediately; the server reloads in place. Settings marked <span class="locked">set by environment</span> come from the container's environment variables and can only be changed there.</p>
+        <p class="lead">Saving applies changes immediately; the server reloads in place. Settings are stored, encrypted, in the database. Those marked <span class="locked">set by environment</span> come from the container's environment variables, and <span class="locked">set in config.toml</span> from the data directory's <code>config.toml</code>; change them there.</p>
         <label class="field" data-key="public_url"><span>Public URL</span><input name="public_url" type="url" placeholder="https://sync.example.com"></label>
         <label class="check" data-key="signups_enabled"><input name="signups_enabled" type="checkbox"> Allow new accounts</label>
         <label class="check" data-key="invite_only"><input name="invite_only" type="checkbox"> Require an invite code</label>

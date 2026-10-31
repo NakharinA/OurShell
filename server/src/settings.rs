@@ -1,9 +1,19 @@
-//! The server's persistent configuration file, `$OURSHELL_DATA_DIR/config.toml`.
+//! Server configuration and where each key comes from.
 //!
-//! The setup wizard and the admin page write it; environment variables
-//! override it key by key, so existing env-only deployments (docker-compose
-//! with a `.env`) keep working unchanged. A key that comes from the
-//! environment is reported as *locked*: the admin page shows it read-only.
+//! Precedence, highest first: environment variables > `config.toml` in the
+//! data dir (`$OURSHELL_DATA_DIR`) > the encrypted settings row in the
+//! database (see [`db`]) > built-in defaults.
+//!
+//! The *bootstrap* keys (`database_url`, `server_master_key`, `bind_addr`,
+//! see [`BOOTSTRAP_KEYS`]) are needed before the database can be read, so
+//! they only ever come from the environment or `config.toml`. Every other
+//! setting is written by the setup wizard and the admin page into the
+//! database, so a deployment without a persistent data volume keeps them
+//! across redeploys. A key that comes from the environment (or from
+//! `config.toml`, which also overrides the database) is reported as
+//! *locked*: the admin page shows it read-only.
+
+pub mod db;
 
 use std::path::{Path, PathBuf};
 
@@ -90,6 +100,127 @@ pub struct FileTls {
     pub email: Option<String>,
 }
 
+/// Keys that stay out of the database (they're needed to reach and decrypt
+/// it): environment or `config.toml` only.
+pub const BOOTSTRAP_KEYS: &[&str] = &["database_url", "server_master_key", "bind_addr"];
+
+impl FileConfig {
+    /// Only the bootstrap keys (all `config.toml` holds from now on).
+    pub fn bootstrap(&self) -> FileConfig {
+        FileConfig {
+            database_url: self.database_url.clone(),
+            bind_addr: self.bind_addr.clone(),
+            server_master_key: self.server_master_key.clone(),
+            ..Default::default()
+        }
+    }
+
+    /// Everything but the bootstrap keys (what the database holds).
+    pub fn without_bootstrap(&self) -> FileConfig {
+        FileConfig {
+            database_url: None,
+            bind_addr: None,
+            server_master_key: None,
+            ..self.clone()
+        }
+    }
+
+    /// Sets any non-bootstrap key.
+    pub fn has_settings(&self) -> bool {
+        self.without_bootstrap() != FileConfig::default()
+    }
+}
+
+/// `over` on top of `base`, key by key. `[oidc]`, `[tls]` and
+/// `trusted_proxies` are single values; `[backup]` merges field by field.
+pub fn merge(base: &FileConfig, over: &FileConfig) -> FileConfig {
+    fn pick<T: Clone>(over: &Option<T>, base: &Option<T>) -> Option<T> {
+        over.clone().or_else(|| base.clone())
+    }
+    let backup = match (&base.backup, &over.backup) {
+        (None, None) => None,
+        (b, o) => {
+            let d = FileBackup::default();
+            let (b, o) = (b.as_ref().unwrap_or(&d), o.as_ref().unwrap_or(&d));
+            Some(FileBackup {
+                enabled: pick(&o.enabled, &b.enabled),
+                endpoint: pick(&o.endpoint, &b.endpoint),
+                region: pick(&o.region, &b.region),
+                bucket: pick(&o.bucket, &b.bucket),
+                prefix: pick(&o.prefix, &b.prefix),
+                access_key_id: pick(&o.access_key_id, &b.access_key_id),
+                secret_access_key: pick(&o.secret_access_key, &b.secret_access_key),
+                path_style: pick(&o.path_style, &b.path_style),
+                passphrase: pick(&o.passphrase, &b.passphrase),
+                interval_hours: pick(&o.interval_hours, &b.interval_hours),
+                keep: pick(&o.keep, &b.keep),
+            })
+        }
+    };
+    FileConfig {
+        database_url: pick(&over.database_url, &base.database_url),
+        bind_addr: pick(&over.bind_addr, &base.bind_addr),
+        server_master_key: pick(&over.server_master_key, &base.server_master_key),
+        public_url: pick(&over.public_url, &base.public_url),
+        signups_enabled: pick(&over.signups_enabled, &base.signups_enabled),
+        invite_only: pick(&over.invite_only, &base.invite_only),
+        max_devices_per_user: pick(&over.max_devices_per_user, &base.max_devices_per_user),
+        rate_limit_per_min: pick(&over.rate_limit_per_min, &base.rate_limit_per_min),
+        session_ttl_hours: pick(&over.session_ttl_hours, &base.session_ttl_hours),
+        admin_password_hash: pick(&over.admin_password_hash, &base.admin_password_hash),
+        oidc: pick(&over.oidc, &base.oidc),
+        tls: pick(&over.tls, &base.tls),
+        behind_proxy: pick(&over.behind_proxy, &base.behind_proxy),
+        trusted_proxies: pick(&over.trusted_proxies, &base.trusted_proxies),
+        backup,
+    }
+}
+
+/// The keys `cfg` sets, named like [`ENV_KEYS`] (plus `"oidc"` and
+/// `"admin_password_hash"`), in [`ENV_KEYS`] order.
+pub fn keys_set(cfg: &FileConfig) -> Vec<&'static str> {
+    let b = cfg.backup.clone().unwrap_or_default();
+    let tls = cfg.tls.as_ref();
+    let mut out: Vec<&'static str> = ENV_KEYS
+        .iter()
+        .map(|(k, _)| *k)
+        .filter(|k| match *k {
+            "database_url" => cfg.database_url.is_some(),
+            "bind_addr" => cfg.bind_addr.is_some(),
+            "server_master_key" => cfg.server_master_key.is_some(),
+            "public_url" => cfg.public_url.is_some(),
+            "signups_enabled" => cfg.signups_enabled.is_some(),
+            "invite_only" => cfg.invite_only.is_some(),
+            "max_devices_per_user" => cfg.max_devices_per_user.is_some(),
+            "rate_limit_per_min" => cfg.rate_limit_per_min.is_some(),
+            "session_ttl_hours" => cfg.session_ttl_hours.is_some(),
+            "tls_domain" => tls.is_some(),
+            "tls_email" => tls.is_some_and(|t| t.email.is_some()),
+            "behind_proxy" => cfg.behind_proxy.is_some(),
+            "trusted_proxies" => cfg.trusted_proxies.is_some(),
+            "backup_enabled" => b.enabled.is_some(),
+            "backup_endpoint" => b.endpoint.is_some(),
+            "backup_region" => b.region.is_some(),
+            "backup_bucket" => b.bucket.is_some(),
+            "backup_prefix" => b.prefix.is_some(),
+            "backup_access_key_id" => b.access_key_id.is_some(),
+            "backup_secret_access_key" => b.secret_access_key.is_some(),
+            "backup_path_style" => b.path_style.is_some(),
+            "backup_passphrase" => b.passphrase.is_some(),
+            "backup_interval_hours" => b.interval_hours.is_some(),
+            "backup_keep" => b.keep.is_some(),
+            _ => false,
+        })
+        .collect();
+    if cfg.oidc.is_some() {
+        out.push("oidc");
+    }
+    if cfg.admin_password_hash.is_some() {
+        out.push("admin_password_hash");
+    }
+    out
+}
+
 /// Reads `config.toml`; a missing file is an empty config.
 pub fn read(dir: &Path) -> Result<FileConfig> {
     let path = dir.join(CONFIG_FILE);
@@ -104,10 +235,12 @@ pub fn read(dir: &Path) -> Result<FileConfig> {
 /// setup wizard's backup download).
 pub fn to_toml(cfg: &FileConfig) -> Result<String> {
     Ok(format!(
-        "# OurShell server configuration. Written by the setup wizard and the\n\
-         # /admin page; environment variables override any key here.\n\
-         # Keep a copy of server_master_key: database backups can't be\n\
-         # restored without it.\n\n{}",
+        "# OurShell server configuration. The setup wizard writes the database\n\
+         # URL and master key here; all other settings live (encrypted) in the\n\
+         # database and are changed on /admin. Environment variables override\n\
+         # any key here, and keys here override the database.\n\
+         # Keep a copy of server_master_key: the database can't be read without\n\
+         # it.\n\n{}",
         toml::to_string_pretty(cfg)?
     ))
 }
@@ -198,12 +331,35 @@ pub fn clear_key(file: &mut FileConfig, key: &str) {
     }
 }
 
-/// The file config with environment overrides applied, plus which keys the
-/// environment pinned (`"oidc"` stands for all four `OIDC_*` variables).
+/// The merged settings, plus which keys the environment pinned (`"oidc"`
+/// stands for all four `OIDC_*` variables) and which non-bootstrap keys
+/// `config.toml` sets (they override the database, so the admin page shows
+/// them read-only too).
 #[derive(Clone, Debug, Default)]
 pub struct Effective {
     pub values: FileConfig,
     pub env_locked: Vec<&'static str>,
+    pub file_locked: Vec<&'static str>,
+}
+
+impl Effective {
+    /// Set by the environment or `config.toml`: not editable on `/admin`.
+    pub fn locked(&self, key: &str) -> bool {
+        self.env_locked.contains(&key) || self.file_locked.contains(&key)
+    }
+}
+
+/// The full precedence chain: `env` > `file` (`config.toml`) > `db` (the
+/// database's settings row; its bootstrap keys are ignored) > defaults.
+pub fn resolve(
+    file: &FileConfig,
+    db: Option<&FileConfig>,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Effective> {
+    let base = db.map(FileConfig::without_bootstrap).unwrap_or_default();
+    let mut eff = apply_env(&merge(&base, file), env)?;
+    eff.file_locked = keys_set(&file.without_bootstrap());
+    Ok(eff)
 }
 
 /// Overlays environment variables (read through `env`, so tests needn't
@@ -271,12 +427,99 @@ pub fn apply_env(file: &FileConfig, env: &dyn Fn(&str) -> Option<String>) -> Res
     Ok(Effective {
         values: v,
         env_locked: locked,
+        file_locked: Vec::new(),
     })
 }
 
-/// [`read`] + [`apply_env`] with the real process environment.
+/// `config.toml` + the real process environment, without the database:
+/// enough for the bootstrap keys (see [`Store::load`] for everything).
 pub fn load(dir: &Path) -> Result<Effective> {
-    apply_env(&read(dir)?, &|k| std::env::var(k).ok())
+    resolve(&read(dir)?, None, &process_env)
+}
+
+/// The process environment, the way [`resolve`] takes it.
+pub fn process_env(k: &str) -> Option<String> {
+    std::env::var(k).ok()
+}
+
+/// The settings of a running (set-up) server: where to read and write them.
+#[derive(Clone)]
+pub struct Store {
+    pub data_dir: PathBuf,
+    pub pool: crate::sqlx::PgPool,
+    pub master_key: [u8; 32],
+    pub database_url: String,
+}
+
+impl Store {
+    /// The database's settings (empty when there's no row yet).
+    pub async fn read_db(&self) -> Result<FileConfig> {
+        Ok(db::read(&self.pool, &self.master_key)
+            .await?
+            .unwrap_or_default())
+    }
+
+    /// Replaces the database's settings (bootstrap keys are dropped).
+    pub async fn write_db(&self, cfg: &FileConfig) -> Result<()> {
+        db::write(&self.pool, &self.master_key, cfg).await
+    }
+
+    /// Everything, with the precedence of [`resolve`]. The bootstrap keys
+    /// this server runs with fill in what neither the environment nor
+    /// `config.toml` has (e.g. remembered since the setup wizard).
+    pub async fn load(&self) -> Result<Effective> {
+        let db = self.read_db().await?;
+        let mut eff = resolve(&read(&self.data_dir)?, Some(&db), &process_env)?;
+        let v = &mut eff.values;
+        if v.database_url.as_deref().is_none_or(str::is_empty) {
+            v.database_url = Some(self.database_url.clone());
+        }
+        if v.server_master_key.as_deref().is_none_or(str::is_empty) {
+            use base64::Engine;
+            v.server_master_key =
+                Some(base64::engine::general_purpose::STANDARD.encode(self.master_key));
+        }
+        Ok(eff)
+    }
+}
+
+/// Suffix of the copy [`write_bootstrap`] keeps of a `config.toml` whose
+/// settings moved into the database.
+pub const LEGACY_COPY_SUFFIX: &str = "before-db-settings";
+
+/// Sets the bootstrap keys `boot` has in `config.toml` (keeping the
+/// file's others). With `strip_settings`, every non-bootstrap key is
+/// removed from the file (they live in the database now); the original is
+/// first copied to `config.toml.before-db-settings`, so nothing is lost.
+/// Returns the text written.
+pub fn update_bootstrap(dir: &Path, boot: &FileConfig, strip_settings: bool) -> Result<String> {
+    let mut file = merge(&read(dir)?, &boot.bootstrap());
+    if strip_settings && file.has_settings() {
+        save_copy(dir, LEGACY_COPY_SUFFIX)?;
+        file = file.bootstrap();
+    }
+    write(dir, &file)?;
+    to_toml(&file)
+}
+
+/// Copies `config.toml` to `config.toml.<suffix>` (or, if that exists
+/// already, `config.toml.<suffix>-<timestamp>`). Returns the copy's path.
+pub fn save_copy(dir: &Path, suffix: &str) -> Result<PathBuf> {
+    let path = dir.join(CONFIG_FILE);
+    let mut copy = dir.join(format!("{CONFIG_FILE}.{suffix}"));
+    if copy.exists() {
+        copy = dir.join(format!(
+            "{CONFIG_FILE}.{suffix}-{}",
+            chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ")
+        ));
+    }
+    std::fs::copy(&path, &copy).with_context(|| format!("failed to copy {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(copy)
 }
 
 fn parse_u32(name: &str, v: &str) -> Result<u32> {
@@ -300,8 +543,14 @@ pub fn setup_code(dir: &Path) -> Result<String> {
         }
     }
     let code = generate_setup_code();
-    std::fs::create_dir_all(dir)?;
-    std::fs::write(&path, &code).with_context(|| format!("failed to write {}", path.display()))?;
+    // A read-only data dir: the code then lives only in memory.
+    if let Err(e) = std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&path, &code)) {
+        tracing::warn!(
+            error = %e,
+            "couldn't save the setup code in {}; it changes on every restart",
+            dir.display()
+        );
+    }
     Ok(code)
 }
 

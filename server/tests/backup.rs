@@ -24,7 +24,7 @@ use ourshell_server::backup::format::{self, KdfParams};
 use ourshell_server::backup::s3::{S3Client, S3Config};
 use ourshell_server::backup::{restore, Backups, Outcome, Trigger};
 use ourshell_server::config::Config;
-use ourshell_server::settings::{self, FileBackup, FileConfig};
+use ourshell_server::settings::{self, Effective, FileBackup, FileConfig, Store};
 use ourshell_server::web::{admin, password, Reload};
 use serde_json::{json, Value};
 use sqlx_core::executor::Executor;
@@ -225,20 +225,24 @@ async fn back_up_dedup_retention_and_restore() {
     let dir = temp_dir();
     let master_key =
         base64::engine::general_purpose::STANDARD.encode(app.state.config().server_master_key);
-    settings::write(
-        &dir,
-        &FileConfig {
-            database_url: Some(base_url()),
-            server_master_key: Some(master_key.clone()),
+    // The backup settings live in the database, like /admin saves them.
+    let store = Store {
+        data_dir: dir.clone(),
+        pool: app.pool.clone(),
+        master_key: app.state.config().server_master_key,
+        database_url: base_url(),
+    };
+    store
+        .write_db(&FileConfig {
             backup: Some(file_backup(&s3, 2)),
             ..Default::default()
-        },
-    )
-    .unwrap();
+        })
+        .await
+        .unwrap();
     let backups = Backups::with_kdf(dir.clone(), FAST);
 
     // First scheduled run uploads.
-    let first = backups.run(&app.pool, Trigger::Scheduled).await.unwrap();
+    let first = backups.run(&store, Trigger::Scheduled).await.unwrap();
     let Outcome::Uploaded { key: first_key, .. } = first.clone() else {
         panic!("expected an upload, got {first:?}");
     };
@@ -251,7 +255,7 @@ async fn back_up_dedup_retention_and_restore() {
     assert_eq!(st.last_key.as_deref(), Some(first_key.as_str()));
 
     // Nothing changed: skipped, nothing uploaded.
-    let again = backups.run(&app.pool, Trigger::Scheduled).await.unwrap();
+    let again = backups.run(&store, Trigger::Scheduled).await.unwrap();
     assert_eq!(
         again,
         Outcome::Unchanged {
@@ -271,7 +275,7 @@ async fn back_up_dedup_retention_and_restore() {
     .await;
     assert_eq!(s, StatusCode::OK);
     assert!(matches!(
-        backups.run(&app.pool, Trigger::Scheduled).await.unwrap(),
+        backups.run(&store, Trigger::Scheduled).await.unwrap(),
         Outcome::Unchanged { .. }
     ));
     assert_eq!(backup_keys(&client.list("srv1/").await.unwrap()).len(), 1);
@@ -287,7 +291,7 @@ async fn back_up_dedup_retention_and_restore() {
             &format!("envelope-{i}"),
         )
         .await;
-        match backups.run(&app.pool, Trigger::Scheduled).await.unwrap() {
+        match backups.run(&store, Trigger::Scheduled).await.unwrap() {
             Outcome::Uploaded { key, deleted, .. } => {
                 assert_eq!(deleted.is_empty(), i == 0, "{deleted:?}");
                 keys.push(key);
@@ -300,7 +304,7 @@ async fn back_up_dedup_retention_and_restore() {
     // A manual run uploads even when nothing changed.
     tokio::time::sleep(Duration::from_millis(1100)).await;
     assert!(matches!(
-        backups.run(&app.pool, Trigger::Manual).await.unwrap(),
+        backups.run(&store, Trigger::Manual).await.unwrap(),
         Outcome::Uploaded { .. }
     ));
     let latest = backup_keys(&client.list("srv1/").await.unwrap())
@@ -312,7 +316,11 @@ async fn back_up_dedup_retention_and_restore() {
     assert!(file.starts_with(format::MAGIC));
     assert!(format::open(&file, "not the passphrase").is_err());
     let bundle = format::open(&file, PASSPHRASE).unwrap();
+    // The bundled configuration has the master key and the database's
+    // settings (and the encrypted settings row is among the tables).
     assert!(bundle.config_toml.contains(&master_key));
+    assert!(bundle.config_toml.contains(&s3.bucket));
+    assert!(bundle.tables.iter().any(|(t, _)| t == "server_settings"));
     let users = bundle
         .manifest
         .tables
@@ -355,10 +363,19 @@ async fn back_up_dedup_retention_and_restore() {
     let restored_cfg: FileConfig = toml::from_str(&bundle.config_toml).unwrap();
     let mut config = Config::from_effective(&settings::Effective {
         values: restored_cfg,
-        env_locked: vec![],
+        ..Default::default()
     })
     .unwrap()
     .unwrap();
+    // The settings row came back with the data and opens with the key.
+    let restored_settings = settings::db::read(&fresh, &config.server_master_key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        restored_settings.backup.unwrap().bucket.as_deref(),
+        Some(s3.bucket.as_str())
+    );
     config.rate_limit_per_min = 1000;
     let state = ourshell_server::state::AppState::new(fresh.clone(), config)
         .await
@@ -438,7 +455,7 @@ async fn admin_backups_tab() {
         data_dir: dir.clone(),
         sessions: Arc::new(admin::Sessions::default()),
         reload: Reload::default(),
-        env_locked: Arc::new(vec![]),
+        effective: Arc::new(Effective::default()),
         tls_status: Arc::new(Default::default()),
         backups: Backups::with_kdf(dir.clone(), FAST),
     });
@@ -544,7 +561,12 @@ async fn admin_backups_tab() {
     form["keep"] = json!(4);
     let (s, _) = call(&web, "PUT", "/admin/api/backup", &cookie, Some(form)).await;
     assert_eq!(s, StatusCode::OK);
-    let saved = settings::read(&dir).unwrap().backup.unwrap();
+    let saved = settings::db::read(&app.pool, &app.state.config().server_master_key)
+        .await
+        .unwrap()
+        .unwrap()
+        .backup
+        .unwrap();
     assert_eq!(saved.passphrase.as_deref(), Some(PASSPHRASE));
     assert_eq!(saved.secret_access_key, Some(s3.secret_access_key.clone()));
     assert_eq!(saved.keep, Some(4));

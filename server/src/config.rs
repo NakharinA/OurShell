@@ -1,9 +1,8 @@
-//! Server configuration: `config.toml` in the data dir (written by the setup
-//! wizard and the admin page; see `crate::settings`) with environment
-//! variables overriding it key by key. See `.env.example` at the repo root
-//! and `docs/self-hosting.md` for the full list and defaults.
+//! The server's runtime configuration, built from the merged settings
+//! (environment > `config.toml` > the database's settings row > defaults;
+//! see `crate::settings`). See `.env.example` at the repo root and
+//! `docs/self-hosting.md` for the full list and defaults.
 
-use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -60,12 +59,6 @@ impl Config {
         Self::from_effective(&eff)?.ok_or_else(|| {
             anyhow!("DATABASE_URL and SERVER_MASTER_KEY (base64, 32 bytes) are required")
         })
-    }
-
-    /// `config.toml` in `data_dir`, overridden by the environment. `None`
-    /// means the server isn't set up yet (no database URL or master key).
-    pub fn load(data_dir: &Path) -> Result<Option<Self>> {
-        Self::from_effective(&settings::load(data_dir)?)
     }
 
     /// Builds a config from merged settings; `None` if the database URL or

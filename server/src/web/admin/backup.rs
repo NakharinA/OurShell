@@ -9,10 +9,10 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::{clean, Admin, AdminCtx};
+use super::{clean, internal, Admin, AdminCtx};
 use crate::backup::{self, BackupConfig, Outcome, Trigger, MIN_PASSPHRASE_LEN};
 use crate::error::{AppError, AppResult};
-use crate::settings::{self, FileBackup};
+use crate::settings::{self, FileBackup, FileConfig};
 
 pub(super) fn routes() -> Router<AdminCtx> {
     Router::new()
@@ -44,22 +44,21 @@ struct BackupView {
     keep: u32,
 }
 
-fn internal(e: anyhow::Error) -> AppError {
-    AppError::internal(format!("{e:#}"))
+async fn effective(ctx: &AdminCtx) -> AppResult<BackupConfig> {
+    BackupConfig::load(&ctx.store()).await.map_err(internal)
 }
 
-fn effective(ctx: &AdminCtx) -> AppResult<BackupConfig> {
-    BackupConfig::load(&ctx.data_dir).map_err(internal)
-}
-
-fn locked_keys(ctx: &AdminCtx) -> Vec<&'static str> {
-    // Re-read: the environment can't change, but keep it next to the values.
-    settings::load(&ctx.data_dir)
-        .map(|e| e.env_locked)
-        .unwrap_or_else(|_| ctx.env_locked.to_vec())
-        .into_iter()
+fn backup_keys(keys: &[&'static str]) -> Vec<&'static str> {
+    keys.iter()
+        .copied()
         .filter(|k| k.starts_with("backup_"))
         .collect()
+}
+
+/// Backup keys set by the environment or `config.toml` (read-only here).
+fn locked_keys(ctx: &AdminCtx) -> Vec<&'static str> {
+    let e = &ctx.effective;
+    backup_keys(&[e.env_locked.as_slice(), e.file_locked.as_slice()].concat())
 }
 
 fn status(ctx: &AdminCtx, cfg: &BackupConfig) -> serde_json::Value {
@@ -79,7 +78,7 @@ fn status(ctx: &AdminCtx, cfg: &BackupConfig) -> serde_json::Value {
 }
 
 async fn get_backup(State(ctx): State<AdminCtx>, _: Admin) -> AppResult<Json<serde_json::Value>> {
-    let c = effective(&ctx)?;
+    let c = effective(&ctx).await?;
     let view = BackupView {
         enabled: c.enabled,
         endpoint: Some(c.s3.endpoint.clone()).filter(|s| !s.is_empty()),
@@ -97,7 +96,8 @@ async fn get_backup(State(ctx): State<AdminCtx>, _: Admin) -> AppResult<Json<ser
     };
     Ok(Json(json!({
         "settings": view,
-        "env_locked": locked_keys(&ctx),
+        "env_locked": backup_keys(&ctx.effective.env_locked),
+        "file_locked": backup_keys(&ctx.effective.file_locked),
         "status": status(&ctx, &c),
         "min_passphrase_len": MIN_PASSPHRASE_LEN,
     })))
@@ -170,13 +170,16 @@ fn merge(stored: Option<FileBackup>, new: BackupView, locked: &[&str]) -> AppRes
     Ok(b)
 }
 
-/// What the settings would be with the form applied (environment included).
-fn preview(ctx: &AdminCtx, new: BackupView) -> AppResult<(settings::FileConfig, BackupConfig)> {
-    let mut file = settings::read(&ctx.data_dir).map_err(internal)?;
-    file.backup = Some(merge(file.backup.take(), new, &locked_keys(ctx))?);
-    let eff = settings::apply_env(&file, &|k| std::env::var(k).ok()).map_err(internal)?;
+/// The database's settings with the form applied, and what the backup
+/// settings would then be (environment and `config.toml` included).
+async fn preview(ctx: &AdminCtx, new: BackupView) -> AppResult<(FileConfig, BackupConfig)> {
+    let store = ctx.store();
+    let mut db = store.read_db().await.map_err(internal)?;
+    db.backup = Some(merge(db.backup.take(), new, &locked_keys(ctx))?);
+    let file = settings::read(&ctx.data_dir).map_err(internal)?;
+    let eff = settings::resolve(&file, Some(&db), &settings::process_env).map_err(internal)?;
     let cfg = BackupConfig::from_file(eff.values.backup.as_ref());
-    Ok((file, cfg))
+    Ok((db, cfg))
 }
 
 async fn put_backup(
@@ -184,12 +187,12 @@ async fn put_backup(
     _: Admin,
     Json(new): Json<BackupView>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let (file, cfg) = preview(&ctx, new)?;
+    let (db, cfg) = preview(&ctx, new).await?;
     if cfg.enabled {
         cfg.check()
             .map_err(|e| AppError::bad_request("incomplete_backup_settings", e.to_string()))?;
     }
-    settings::write(&ctx.data_dir, &file).map_err(internal)?;
+    ctx.store().write_db(&db).await.map_err(internal)?;
     tracing::info!("admin page changed backup settings; reloading");
     // Restarts the schedule, so the first check comes ~2 minutes from now.
     ctx.reload.trigger_soon();
@@ -201,7 +204,7 @@ async fn test_connection(
     _: Admin,
     Json(new): Json<BackupView>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let (_, cfg) = preview(&ctx, new)?;
+    let (_, cfg) = preview(&ctx, new).await?;
     let client = cfg
         .client()
         .map_err(|e| AppError::bad_request("incomplete_backup_settings", e.to_string()))?;
@@ -216,14 +219,14 @@ async fn test_connection(
 }
 
 async fn run_now(State(ctx): State<AdminCtx>, _: Admin) -> AppResult<Json<serde_json::Value>> {
-    match ctx.backups.run(ctx.state.pool(), Trigger::Manual).await {
+    match ctx.backups.run(&ctx.store(), Trigger::Manual).await {
         Ok(Outcome::Busy) => Err(AppError::new(
             StatusCode::CONFLICT,
             "backup_running",
             "a backup is already running",
         )),
         Ok(outcome) => {
-            let cfg = effective(&ctx)?;
+            let cfg = effective(&ctx).await?;
             Ok(Json(
                 json!({ "outcome": outcome, "status": status(&ctx, &cfg) }),
             ))
@@ -237,7 +240,7 @@ async fn run_now(State(ctx): State<AdminCtx>, _: Admin) -> AppResult<Json<serde_
 }
 
 async fn list(State(ctx): State<AdminCtx>, _: Admin) -> AppResult<Json<serde_json::Value>> {
-    let cfg = effective(&ctx)?;
+    let cfg = effective(&ctx).await?;
     let client = cfg
         .client()
         .map_err(|e| AppError::bad_request("incomplete_backup_settings", e.to_string()))?;
