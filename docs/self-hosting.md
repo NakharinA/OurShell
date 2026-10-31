@@ -106,7 +106,7 @@ one-time **setup code** for you; it is also in `.env`
    of three choices:
    - **plain HTTP** on your LAN or VPN (`http://<lan-ip>:8443`);
    - **behind a reverse proxy or ingress** that handles HTTPS (Caddy,
-     nginx, Traefik, Kubernetes, Synology, Cloudflare Tunnel ...): enter
+     nginx, Traefik, Dokploy, Kubernetes, Synology, Cloudflare Tunnel ...): enter
      the proxy's `https://` address, see
      [Behind a reverse proxy or ingress](#behind-a-reverse-proxy-or-ingress);
    - **built-in Let's Encrypt**: enter a domain (and optionally an email),
@@ -531,6 +531,42 @@ ingress-nginx, the controller itself must preserve them, e.g. with
 `externalTrafficPolicy: Local` on its Service; see the ingress-nginx
 documentation. For several replicas, see
 [Running multiple replicas](#running-multiple-replicas).
+
+### Dokploy
+
+Dokploy runs Traefik in front of every app, and Traefik handles HTTPS and the
+certificate. Deploy the image as an **Application** (Docker image
+`ghcr.io/nakharina/ourshell-server:latest`) or as part of a **Docker
+Compose** project, then:
+
+- **Domains:** add your domain with **Container Port `8443`**, HTTPS on,
+  certificate Let's Encrypt. Clients then use `https://your-domain`, with
+  no port.
+- **Don't use port 443 as the Container Port.** It's the port Traefik
+  listens on outside; nothing listens on 443 inside the container, so
+  Traefik answers **502 Bad Gateway**.
+- **Ports:** no published ports are needed; Traefik reaches the container
+  over Dokploy's network.
+- **Environment:** `OURSHELL_BEHIND_PROXY=true` and
+  `PUBLIC_URL=https://your-domain`, plus `DATABASE_URL` (or enter it in the
+  setup wizard). Don't set `OURSHELL_TLS_DOMAIN`: Traefik owns the
+  certificate. Dokploy's network is a private range, which is trusted by
+  default.
+- **Volume:** mount a volume at `/data`.
+- **Docker Compose projects:** attach the server to Dokploy's network so
+  Traefik can see it (otherwise 502 or 404):
+
+  ```yaml
+  services:
+    server:
+      # ... image, environment, volumes as in the compose file above
+      networks: [default, dokploy-network]
+  networks:
+    dokploy-network:
+      external: true
+  ```
+
+The setup code is in the app's **Logs** tab; open `https://your-domain/setup`.
 
 ### Synology DSM reverse proxy
 
