@@ -1,0 +1,150 @@
+name: Server image
+
+# Builds the sync server's Docker image (linux/amd64) and smoke-tests it:
+# the container must come up in setup mode and turn healthy, and the
+# installer must take it from nothing to a set-up server and through an
+# upgrade. The multi-arch image itself is published by release.yml.
+
+on:
+  pull_request:
+    paths:
+      - "server/**"
+      - "crates/proto/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - ".dockerignore"
+      - "scripts/install-server.*"
+      - ".github/workflows/server-image.yml"
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - "crates/proto/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - ".dockerignore"
+      - "scripts/install-server.*"
+      - ".github/workflows/server-image.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: build, smoke test and installer e2e
+    runs-on: ubuntu-24.04
+    env:
+      IMAGE: ourshell-server:ci
+      SETUP_CODE: TEST-CODE-0000-0000
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build (linux/amd64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: server/Dockerfile
+          platforms: linux/amd64
+          build-args: VERSION=ci-${{ github.sha }}
+          tags: ${{ env.IMAGE }}
+          load: true
+          push: false
+          # Same scope as the release workflow's amd64 build.
+          cache-from: type=gha,scope=server-image-amd64
+          cache-to: type=gha,scope=server-image-amd64,mode=max
+
+      - name: Smoke test (setup mode, healthcheck)
+        run: |
+          docker run -d --name smoke -e OURSHELL_SETUP_CODE="$SETUP_CODE" \
+            -p 18500:8443 -v smoke-data:/data "$IMAGE"
+          for _ in $(seq 60); do
+            health=$(curl -fsS http://127.0.0.1:18500/v1/health || true)
+            [ -n "$health" ] && break
+            sleep 1
+          done
+          echo "health: $health"
+          echo "$health" | grep -q '"mode":"setup"'
+          curl -fsS http://127.0.0.1:18500/setup | grep -qi '<html'
+          for _ in $(seq 60); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' smoke)
+            [ "$status" = healthy ] && break
+            sleep 2
+          done
+          echo "container health: $status"
+          [ "$status" = healthy ]
+          # /data must be writable by the non-root user.
+          docker exec smoke sh -c 'touch /data/.probe && rm /data/.probe'
+          docker rm -f smoke
+          docker volume rm smoke-data
+
+      - name: Check for the installer
+        id: installer
+        run: |
+          if [ -f scripts/install-server.sh ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::scripts/install-server.sh does not exist yet; skipping the installer e2e test"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Installer e2e (fresh install with a bundled database)
+        if: steps.installer.outputs.present == 'true'
+        run: |
+          dir="$RUNNER_TEMP/ourshell"
+          sh scripts/install-server.sh --yes --db new --port 18443 --dir "$dir" --image "$IMAGE"
+          code=$(sed -n 's/^OURSHELL_SETUP_CODE=//p' "$dir/.env" | tr -d "\"'\r")
+          [ -n "$code" ] || { echo "no OURSHELL_SETUP_CODE in $dir/.env" >&2; exit 1; }
+          for _ in $(seq 90); do
+            health=$(curl -fsS http://127.0.0.1:18443/v1/health || true)
+            echo "$health" | grep -q '"mode":"setup"' && break
+            sleep 2
+          done
+          echo "health before setup: $health"
+          echo "$health" | grep -q '"mode":"setup"'
+          # The installer supplies DATABASE_URL via the environment.
+          curl -fsS -X POST http://127.0.0.1:18443/setup/api/finish \
+            -H 'Content-Type: application/json' \
+            -d "{\"code\":\"$code\",\"signups_enabled\":true,\"invite_only\":true,\"admin_password\":\"a long admin password for ci\"}"
+          echo
+          for _ in $(seq 60); do
+            health=$(curl -fsS http://127.0.0.1:18443/v1/health || true)
+            echo "$health" | grep -q '"mode":"ready"' && break
+            sleep 2
+          done
+          echo "health after setup: $health"
+          echo "$health" | grep -q '"mode":"ready"'
+
+      - name: Installer e2e (upgrade)
+        if: steps.installer.outputs.present == 'true'
+        run: |
+          sh scripts/install-server.sh --upgrade --yes --dir "$RUNNER_TEMP/ourshell" --image "$IMAGE"
+          for _ in $(seq 60); do
+            health=$(curl -fsS http://127.0.0.1:18443/v1/health || true)
+            echo "$health" | grep -q '"mode":"ready"' && break
+            sleep 2
+          done
+          echo "health after upgrade: $health"
+          echo "$health" | grep -q '"mode":"ready"'
+
+      - name: Container logs
+        if: failure()
+        run: |
+          docker ps -a
+          for c in $(docker ps -aq); do
+            echo "::group::$(docker inspect -f '{{.Name}}' "$c")"
+            docker logs "$c" 2>&1 | tail -n 200
+            echo "::endgroup::"
+          done
+
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck scripts/install-server.sh
+        run: |
+          if [ ! -f scripts/install-server.sh ]; then
+            echo "::notice::scripts/install-server.sh does not exist yet; skipping shellcheck"
+            exit 0
+          fi
+          shellcheck --version
+          shellcheck scripts/install-server.sh
