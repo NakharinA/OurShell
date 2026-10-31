@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Join this OurShell server</title>
+<link rel="icon" href="/web/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/web/app.css">
+<script src="/web/common.js" defer></script>
+<script src="/web/invite.js" defer></script>
+</head>
+<body>
+<main class="shell">
+  <header class="brand">
+    <img src="/web/logo.svg" alt="">
+    <div>
+      <h1>You're invited to an OurShell server</h1>
+      <p>Sync your SSH hosts, keys and snippets, end-to-end encrypted</p>
+    </div>
+  </header>
+
+  <section class="card" id="invite" hidden>
+    <h2>Your invite</h2>
+    <dl class="kv">
+      <dt>Server</dt><dd class="mono" id="server"></dd>
+      <dt>Invite code</dt><dd class="mono" id="code"></dd>
+    </dl>
+    <div class="actions">
+      <button type="button" id="copy-server">Copy server</button>
+      <button type="button" id="copy-code">Copy code</button>
+      <button type="button" class="primary" id="copy-link">Copy invite link</button>
+    </div>
+  </section>
+
+  <section class="card" id="no-code" hidden>
+    <p class="note warn">This link has no invite code. Ask the person who sent it for a new link.</p>
+  </section>
+
+  <section class="card">
+    <h2>How to join</h2>
+    <ol>
+      <li>Install the OurShell app: <a href="https://github.com/NakharinA/OurShell/releases/latest">download it here</a> (Windows, macOS, Linux).</li>
+      <li>Open it and create your vault. Its <b>master password</b> is also your password on this server.</li>
+      <li>Open <b>Account &amp; sync</b> → <b>Create account</b>. Paste this invite link into the <b>Server URL</b> field (the server and invite code are filled in for you), enter your email and master password, and create the account.</li>
+    </ol>
+    <p class="hint">Each invite code creates one account. Already have an account here? Use <b>Sign in</b> instead; no code needed.</p>
+  </section>
+
+  <footer>OurShell · <a href="https://github.com/NakharinA/OurShell">github.com/NakharinA/OurShell</a></footer>
+</main>
+</body>
+</html>

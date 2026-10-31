@@ -398,14 +398,15 @@ async fn vault_cmd(cmd: VaultCmd, json_out: bool) -> Result<()> {
         }
         VaultCmd::Passwd => {
             let c = connect().await?;
-            let st: VaultStatus = c.call(method::VAULT_STATUS, &json!({})).await?;
-            let old_password = if st.unlocked {
-                None
-            } else {
-                Some(read_secret("Current master password: ")?)
+            let old_password = Some(read_secret("Current master password: ")?);
+            // Scripts pass the current password in OURSHELL_PASSWORD and the
+            // new one in OURSHELL_NEW_PASSWORD.
+            let new_password = match std::env::var("OURSHELL_NEW_PASSWORD") {
+                Ok(p) if !p.is_empty() => p,
+                _ => rpassword::prompt_password("New master password: ")
+                    .context("could not read password")?,
             };
-            let new_password = read_secret("New master password: ")?;
-            if std::env::var("OURSHELL_PASSWORD").is_err() {
+            if std::env::var("OURSHELL_NEW_PASSWORD").is_err() {
                 let again = read_secret("Repeat new master password: ")?;
                 if again != new_password {
                     bail!("passwords do not match");

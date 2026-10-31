@@ -50,6 +50,22 @@ async fn full_sync_flow_two_devices_conflict_and_tombstone() {
         )
         .unwrap();
 
+    // --- The account password must be the vault's master password (other
+    // devices unlock the synced vault with it): anything else is refused
+    // before an account is created.
+    let err = sync::signup(
+        &server.base_url,
+        "alice@example.com",
+        "a different password",
+        &mut vault_a,
+        "device-a",
+        None,
+    )
+    .await
+    .expect_err("signup with a password other than the master password");
+    assert!(err.to_string().contains("master password"), "{err}");
+    assert!(vault_a.header().local_only, "nothing was signed up");
+
     // --- Signs up: uploads the vault's existing key material and the two hosts.
     let mut session_a = sync::signup(
         &server.base_url,
@@ -74,6 +90,27 @@ async fn full_sync_flow_two_devices_conflict_and_tombstone() {
 
     // --- Device B: brand-new machine, no local vault yet. Logs in and
     // pulls both hosts down, decrypted.
+    // A wrong password and an unknown email fail the same way (the server
+    // answers unknown emails with a decoy), with a clear error.
+    for (email, pw) in [
+        ("alice@example.com", "not the password"),
+        ("nobody@example.com", password),
+    ] {
+        let Err(err) = sync::login(
+            &server.base_url,
+            email,
+            pw,
+            &dir.path().join("x.db"),
+            "device-x",
+            None,
+        )
+        .await
+        else {
+            panic!("bad credentials were accepted");
+        };
+        assert!(matches!(err, sync::SyncError::InvalidCredentials), "{err}");
+    }
+
     let (mut vault_b, mut session_b) = sync::login(
         &server.base_url,
         "alice@example.com",

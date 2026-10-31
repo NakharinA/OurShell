@@ -535,8 +535,9 @@ pub struct VaultRecoverParams {
     pub new_password: String,
 }
 
-/// `account.change_password` params. `old_password` is only needed if the
-/// vault isn't already unlocked.
+/// `account.change_password` params. `old_password` (the current master
+/// password) is always required and verified, even when the vault is
+/// unlocked; it's an `Option` only for wire compatibility.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountChangePasswordParams {
     #[serde(default)]

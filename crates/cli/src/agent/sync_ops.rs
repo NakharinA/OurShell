@@ -100,15 +100,23 @@ fn sync_err(e: SyncError) -> RpcError {
             status,
             code,
             message,
-        } => err(
-            rpc::INVALID_PARAMS,
-            format!("sync server rejected the request ({status} {code}): {message}"),
-        ),
+        } => RpcError {
+            code: rpc::INVALID_PARAMS,
+            message: format!("sync server rejected the request ({status} {code}): {message}"),
+            // The server's error code (e.g. `totp_required`), so clients can
+            // react to it without parsing the message.
+            data: Some(json!({ "server_status": status, "server_error": code })),
+        },
         SyncError::Http(e) => err(
             rpc::INTERNAL_ERROR,
             format!("could not reach the sync server: {e}"),
         ),
         SyncError::Vault(e) => vault_err(e),
+        SyncError::InvalidCredentials => RpcError {
+            code: rpc::INVALID_PARAMS,
+            message: SyncError::InvalidCredentials.to_string(),
+            data: Some(json!({ "server_error": "invalid_credentials" })),
+        },
         other => err(rpc::INTERNAL_ERROR, other.to_string()),
     }
 }
@@ -391,14 +399,23 @@ async fn account_change_password(state: &Arc<State>, p: AccountChangePasswordPar
             ))
         }
     };
-    if !vault.is_unlocked() {
-        let pw = p.old_password.as_deref().ok_or_else(|| {
+    // Always prove the current master password, even when the vault is
+    // already unlocked: otherwise anyone at an unlocked computer could
+    // change it (and the sync account's password with it).
+    let old = p
+        .old_password
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
             err(
-                rpc::VAULT_LOCKED,
-                "vault is locked; pass old_password to unlock it first",
+                rpc::INVALID_PARAMS,
+                "the current master password is required to change it",
             )
         })?;
-        tokio::task::block_in_place(|| vault.unlock(pw)).map_err(vault_err)?;
+    if vault.is_unlocked() {
+        tokio::task::block_in_place(|| vault.check_password(old)).map_err(vault_err)?;
+    } else {
+        tokio::task::block_in_place(|| vault.unlock(old)).map_err(vault_err)?;
     }
     let session = SyncSession::load(vault).map_err(sync_err)?;
     let server_updated = session.is_some();

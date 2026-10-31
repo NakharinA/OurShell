@@ -8,11 +8,20 @@
   import { accountStatus, refreshAccountStatus } from "../../stores/account";
   import { toast, errorText } from "../../stores/toast";
   import type { DeviceInfo } from "../../types";
+  import { serverErrorCode } from "../../serverError";
+  import { parseInviteLink } from "../../inviteLink";
 
+  /** Signed out: sign in to an existing account, or create one. */
+  let mode: "signin" | "signup" = "signin";
   let server = "";
   let email = "";
   let password = "";
+  let password2 = "";
+  let inviteCode = "";
+  /** Shown only once the server says this account uses two-factor sign-in. */
+  let totpNeeded = false;
   let totp = "";
+  let totpInput: HTMLInputElement | undefined;
   let busy = false;
   let error = "";
   let devices: DeviceInfo[] = [];
@@ -20,6 +29,9 @@
   let totpCode = "";
   let changeOld = "";
   let changeNew = "";
+  let changeNew2 = "";
+  /** Change-password errors, separate from sign-in errors. */
+  let pwError = "";
 
   $: if ($accountModalOpen && $accountStatus.signed_in) void loadDevices();
 
@@ -34,17 +46,61 @@
   function close(): void {
     accountModalOpen.set(false);
     error = "";
+    pwError = "";
+    changeOld = changeNew = changeNew2 = "";
     totpSetup = null;
+    password = "";
+    password2 = "";
+    totp = "";
+    totpNeeded = false;
+  }
+
+  /** A pasted invite link fills in the server and the invite code. */
+  function onServerInput(): void {
+    const invite = parseInviteLink(server);
+    if (!invite) return;
+    server = invite.server;
+    inviteCode = invite.code;
+    if (mode !== "signup") setMode("signup");
+  }
+
+  function setMode(m: typeof mode): void {
+    mode = m;
+    error = "";
+    totp = "";
+    totpNeeded = false;
+  }
+
+  /** Friendly text for the sync server's error codes; else the raw message. */
+  function accountError(err: unknown): string {
+    switch (serverErrorCode(err)) {
+      case "totp_invalid":
+        return $t("acct.totpWrong");
+      case "invite_required":
+      case "invalid_invite":
+        return $t("acct.inviteRequired");
+      case "signups_disabled":
+        return $t("acct.signupsDisabled");
+      case "invalid_credentials":
+        return $t("acct.badCredentials");
+      default:
+        return errorText(err, $t("toast.error"));
+    }
   }
 
   async function signup(): Promise<void> {
+    if (password !== password2) {
+      error = $t("acct.passwordMismatch");
+      return;
+    }
     busy = true;
     error = "";
     try {
-      await rpc.accountSignup({ server, email, password });
+      await rpc.accountSignup({ server, email, password, invite_code: inviteCode.trim() || null });
       await refreshAccountStatus();
+      password = password2 = "";
     } catch (err) {
-      error = errorText(err, $t("toast.error"));
+      error = accountError(err);
     } finally {
       busy = false;
     }
@@ -54,10 +110,19 @@
     busy = true;
     error = "";
     try {
-      await rpc.accountLogin({ server, email, password, totp: totp || null });
+      await rpc.accountLogin({ server, email, password, totp: totpNeeded ? totp.trim() || null : null });
       await refreshAccountStatus();
+      password = totp = "";
+      totpNeeded = false;
     } catch (err) {
-      error = errorText(err, $t("toast.error"));
+      if (serverErrorCode(err) === "totp_required") {
+        // Ask for the code only now: most accounts never need it.
+        totpNeeded = true;
+        error = "";
+        setTimeout(() => totpInput?.focus(), 0);
+      } else {
+        error = accountError(err);
+      }
     } finally {
       busy = false;
     }
@@ -122,15 +187,21 @@
   }
 
   async function changePassword(): Promise<void> {
+    if (changeNew !== changeNew2) {
+      pwError = $t("acct.passwordMismatch");
+      return;
+    }
     busy = true;
-    error = "";
+    pwError = "";
     try {
-      await rpc.accountChangePassword({ old_password: changeOld || null, new_password: changeNew });
+      // The agent always verifies the current master password.
+      await rpc.accountChangePassword({ old_password: changeOld, new_password: changeNew });
       changeOld = "";
       changeNew = "";
+      changeNew2 = "";
       toast.success($t("a.saved"));
     } catch (err) {
-      error = errorText(err, $t("toast.error"));
+      pwError = errorText(err, $t("toast.error"));
     } finally {
       busy = false;
     }
@@ -141,29 +212,56 @@
   <Modal title={$t("acct.title")} size="wide" onClose={close}>
     {#if !$accountStatus.signed_in}
       <div class="psec">
-        <p class="hint">{$t("acct.signedOutHint")}</p>
-        <div class="field">
-          <label for="acct-server">{$t("acct.server")}</label>
-          <div class="input"><input id="acct-server" bind:value={server} placeholder="https://sync.example.com" /></div>
+        <div class="seg" role="tablist">
+          <button role="tab" aria-selected={mode === "signin"} class:on={mode === "signin"} on:click={() => setMode("signin")}>{$t("acct.tabSignin")}</button>
+          <button role="tab" aria-selected={mode === "signup"} class:on={mode === "signup"} on:click={() => setMode("signup")}>{$t("acct.tabSignup")}</button>
         </div>
-        <div class="field">
-          <label for="acct-email">{$t("acct.email")}</label>
-          <div class="input"><input id="acct-email" bind:value={email} /></div>
-        </div>
-        <div class="field">
-          <label for="acct-pass">{$t("acct.password")}</label>
-          <div class="input"><input id="acct-pass" type="password" bind:value={password} /></div>
-        </div>
-        <div class="field">
-          <label for="acct-totp">TOTP</label>
-          <div class="input"><input id="acct-totp" bind:value={totp} placeholder="000000" /></div>
-        </div>
-        {#if error}<p class="error-text">{error}</p>{/if}
-        <div class="row">
-          <span class="spacer"></span>
-          <button class="btn btn-soft" disabled={busy} on:click={signup}>{$t("acct.signup")}</button>
-          <button class="btn btn-primary" disabled={busy} on:click={login}>{$t("acct.login")}</button>
-        </div>
+        <p class="hint">{mode === "signin" ? $t("acct.signinHint") : $t("acct.signupHint")}</p>
+        <form on:submit|preventDefault={mode === "signin" ? login : signup}>
+          <div class="field">
+            <label for="acct-server">{$t("acct.server")}</label>
+            <div class="input"><input id="acct-server" bind:value={server} on:input={onServerInput} placeholder="https://sync.example.com" autocomplete="url" /></div>
+          </div>
+          <div class="field">
+            <label for="acct-email">{$t("acct.email")}</label>
+            <div class="input"><input id="acct-email" type="email" bind:value={email} autocomplete="username" /></div>
+          </div>
+          <div class="field">
+            <label for="acct-pass">{mode === "signup" ? $t("acct.masterPassword") : $t("acct.password")}</label>
+            <div class="input">
+              <input id="acct-pass" type="password" bind:value={password} autocomplete={mode === "signup" ? "new-password" : "current-password"} />
+            </div>
+            {#if mode === "signup"}<small class="hint">{$t("acct.masterPasswordHint")}</small>{/if}
+          </div>
+          {#if mode === "signup"}
+            <div class="field">
+              <label for="acct-pass2">{$t("acct.confirmPassword")}</label>
+              <div class="input"><input id="acct-pass2" type="password" bind:value={password2} autocomplete="new-password" /></div>
+            </div>
+            <div class="field">
+              <label for="acct-invite">{$t("acct.inviteCode")}</label>
+              <div class="input"><input id="acct-invite" bind:value={inviteCode} placeholder={$t("acct.optional")} autocomplete="off" spellcheck="false" /></div>
+              <small class="hint">{$t("acct.inviteHint")}</small>
+            </div>
+          {:else if totpNeeded}
+            <p class="hint">{$t("acct.totpNeeded")}</p>
+            <div class="field">
+              <label for="acct-totp">{$t("acct.totpLogin")}</label>
+              <div class="input">
+                <input id="acct-totp" bind:this={totpInput} bind:value={totp} placeholder="000000" inputmode="numeric" autocomplete="one-time-code" maxlength="8" />
+              </div>
+            </div>
+          {/if}
+          {#if error}<p class="error-text">{error}</p>{/if}
+          <div class="row">
+            <span class="spacer"></span>
+            {#if mode === "signin"}
+              <button class="btn btn-primary" type="submit" disabled={busy || (totpNeeded && !totp.trim())}>{$t("acct.login")}</button>
+            {:else}
+              <button class="btn btn-primary" type="submit" disabled={busy || !password || !password2}>{$t("acct.signup")}</button>
+            {/if}
+          </div>
+        </form>
       </div>
     {:else}
       <div class="psec">
@@ -199,24 +297,31 @@
         {/if}
       </div>
       <div class="psec">
-        <h3><Icon name="pass" /><span>{$t("acct.changePassword")}</span></h3>
-        <div class="field">
-          <label for="chg-old">{$t("acct.oldPassword")}</label>
-          <div class="input"><input id="chg-old" type="password" bind:value={changeOld} /></div>
-        </div>
-        <div class="field">
-          <label for="chg-new">{$t("acct.newPassword")}</label>
-          <div class="input"><input id="chg-new" type="password" bind:value={changeNew} /></div>
-        </div>
-        {#if error}<p class="error-text">{error}</p>{/if}
-        <button class="btn btn-primary" style="align-self:flex-start" disabled={busy || !changeNew} on:click={changePassword}>
-          {$t("acct.changePassword")}
-        </button>
-      </div>
-      <div class="psec">
         <button class="btn btn-danger" style="align-self:flex-start" disabled={busy} on:click={logout}>{$t("acct.logout")}</button>
       </div>
     {/if}
+    <!-- Available with or without a sync account: it's the vault's master
+         password (and, when signed in, the account's password too). -->
+    <div class="psec">
+      <h3><Icon name="pass" /><span>{$t("acct.changePassword")}</span></h3>
+      <p class="hint">{$accountStatus.signed_in ? $t("acct.changePasswordSynced") : $t("acct.changePasswordLocal")}</p>
+      <div class="field">
+        <label for="chg-old">{$t("acct.oldPassword")}</label>
+        <div class="input"><input id="chg-old" type="password" bind:value={changeOld} autocomplete="current-password" /></div>
+      </div>
+      <div class="field">
+        <label for="chg-new">{$t("acct.newPassword")}</label>
+        <div class="input"><input id="chg-new" type="password" bind:value={changeNew} autocomplete="new-password" /></div>
+      </div>
+      <div class="field">
+        <label for="chg-new2">{$t("acct.confirmPassword")}</label>
+        <div class="input"><input id="chg-new2" type="password" bind:value={changeNew2} autocomplete="new-password" /></div>
+      </div>
+      {#if pwError}<p class="error-text">{pwError}</p>{/if}
+      <button class="btn btn-primary" style="align-self:flex-start" disabled={busy || !changeOld || !changeNew || !changeNew2} on:click={changePassword}>
+        {$t("acct.changePassword")}
+      </button>
+    </div>
     <svelte:fragment slot="footer">
       <button class="btn btn-ghost" on:click={close}>{$t("p.close")}</button>
     </svelte:fragment>

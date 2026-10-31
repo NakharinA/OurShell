@@ -561,8 +561,9 @@ export interface VaultRecoverResult {
   server_error?: string;
 }
 
-/** `account.change_password` params. `old_password` is only needed if the
- * vault isn't already unlocked. */
+/** `account.change_password` params. `old_password` (the current master
+ * password) is always required and verified, even when the vault is
+ * unlocked. */
 export interface AccountChangePasswordParams {
   old_password?: string | null;
   new_password: string;

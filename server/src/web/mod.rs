@@ -19,9 +19,11 @@ const APP_CSS: &str = include_str!("../../web/app.css");
 const COMMON_JS: &str = include_str!("../../web/common.js");
 const SETUP_JS: &str = include_str!("../../web/setup.js");
 const ADMIN_JS: &str = include_str!("../../web/admin.js");
+const INVITE_JS: &str = include_str!("../../web/invite.js");
 const LOGO_SVG: &str = include_str!("../../../assets/logo/ourshell.svg");
 pub(crate) const SETUP_HTML: &str = include_str!("../../web/setup.html");
 pub(crate) const ADMIN_HTML: &str = include_str!("../../web/admin.html");
+pub(crate) const INVITE_HTML: &str = include_str!("../../web/invite.html");
 
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
                    connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
@@ -106,6 +108,10 @@ pub(crate) fn assets<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route(
             "/web/admin.js",
             get(|| async { asset("text/javascript; charset=utf-8", ADMIN_JS) }),
+        )
+        .route(
+            "/web/invite.js",
+            get(|| async { asset("text/javascript; charset=utf-8", INVITE_JS) }),
         )
         .route(
             "/web/logo.svg",
