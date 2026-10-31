@@ -25,6 +25,11 @@ pub enum SyncError {
     Json(#[from] serde_json::Error),
     #[error("sync protocol error: {0}")]
     Protocol(String),
+    /// OPAQUE rejected the login. By design it can't tell which part was
+    /// wrong: the server answers unknown emails with a decoy, so a wrong
+    /// password, a mistyped email and a missing account look the same.
+    #[error("wrong email or password, or this server has no account with that email")]
+    InvalidCredentials,
 }
 
 pub type Result<T> = std::result::Result<T, SyncError>;

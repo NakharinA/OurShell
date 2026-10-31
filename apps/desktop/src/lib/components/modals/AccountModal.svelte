@@ -66,6 +66,8 @@
         return $t("acct.inviteRequired");
       case "signups_disabled":
         return $t("acct.signupsDisabled");
+      case "invalid_credentials":
+        return $t("acct.badCredentials");
       default:
         return errorText(err, $t("toast.error"));
     }

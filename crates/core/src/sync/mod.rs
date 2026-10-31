@@ -212,7 +212,13 @@ pub async fn login(
         })
         .await?;
     let (finalization_bytes, _session_key, _export_key) =
-        opaque::client_login_finish(login_state, password.as_bytes(), &start.credential_response)?;
+        opaque::client_login_finish(login_state, password.as_bytes(), &start.credential_response)
+            .map_err(|e| match e {
+            opaque::OpaqueError::Protocol(
+                opaque::opaque_ke::errors::ProtocolError::InvalidLoginError,
+            ) => SyncError::InvalidCredentials,
+            other => other.into(),
+        })?;
 
     let session_resp = client
         .login_finish(&LoginFinish {

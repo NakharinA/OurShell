@@ -90,6 +90,27 @@ async fn full_sync_flow_two_devices_conflict_and_tombstone() {
 
     // --- Device B: brand-new machine, no local vault yet. Logs in and
     // pulls both hosts down, decrypted.
+    // A wrong password and an unknown email fail the same way (the server
+    // answers unknown emails with a decoy), with a clear error.
+    for (email, pw) in [
+        ("alice@example.com", "not the password"),
+        ("nobody@example.com", password),
+    ] {
+        let Err(err) = sync::login(
+            &server.base_url,
+            email,
+            pw,
+            &dir.path().join("x.db"),
+            "device-x",
+            None,
+        )
+        .await
+        else {
+            panic!("bad credentials were accepted");
+        };
+        assert!(matches!(err, sync::SyncError::InvalidCredentials), "{err}");
+    }
+
     let (mut vault_b, mut session_b) = sync::login(
         &server.base_url,
         "alice@example.com",

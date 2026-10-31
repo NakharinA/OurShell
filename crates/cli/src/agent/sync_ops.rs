@@ -112,6 +112,11 @@ fn sync_err(e: SyncError) -> RpcError {
             format!("could not reach the sync server: {e}"),
         ),
         SyncError::Vault(e) => vault_err(e),
+        SyncError::InvalidCredentials => RpcError {
+            code: rpc::INVALID_PARAMS,
+            message: SyncError::InvalidCredentials.to_string(),
+            data: Some(json!({ "server_error": "invalid_credentials" })),
+        },
         other => err(rpc::INTERNAL_ERROR, other.to_string()),
     }
 }
