@@ -112,6 +112,21 @@ pub enum IdentityCmd {
 }
 
 #[derive(Subcommand)]
+pub enum GroupCmd {
+    /// Add a group.
+    Add {
+        name: String,
+        /// Parent group name or id (makes this a subgroup).
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    #[command(alias = "list")]
+    Ls,
+    /// Remove a group. Its hosts and subgroups move up one level.
+    Rm { group: String },
+}
+
+#[derive(Subcommand)]
 pub enum SnippetCmd {
     Add {
         name: String,
@@ -482,6 +497,77 @@ pub async fn snippet(cmd: SnippetCmd, json_out: bool) -> Result<()> {
             rm(&c, "snippet", &snippet).await?;
             if !json_out {
                 println!("Removed snippet `{snippet}`.");
+            }
+        }
+    }
+    Ok(())
+}
+
+pub async fn group(cmd: GroupCmd, json_out: bool) -> Result<()> {
+    let c = connect_unlocked().await?;
+    match cmd {
+        GroupCmd::Add { name, parent } => {
+            let parent_id = match parent {
+                Some(p) => Some(resolve_id(&c, "group", &p).await?),
+                None => None,
+            };
+            let id = put(
+                &c,
+                "group",
+                None,
+                json!({"name": name, "parent_id": parent_id}),
+            )
+            .await?;
+            if json_out {
+                println!("{}", json!({ "id": id }));
+            } else {
+                println!("Added group `{name}` ({id}).");
+            }
+        }
+        GroupCmd::Ls => {
+            let groups = list(&c, "group").await?;
+            if json_out {
+                println!("{}", serde_json::to_string(&groups)?);
+                return Ok(());
+            }
+            let hosts = list(&c, "host").await?;
+            let name_of = |id: &str| {
+                groups
+                    .iter()
+                    .find(|g| g.id == id)
+                    .map(|g| s(&g.item, "name").to_string())
+            };
+            println!("{:<24} {:<24} {:<6}", "NAME", "PARENT", "HOSTS");
+            for g in &groups {
+                let parent = g.item["parent_id"]
+                    .as_str()
+                    .and_then(name_of)
+                    .unwrap_or_default();
+                let n = hosts
+                    .iter()
+                    .filter(|h| h.item["group_id"].as_str() == Some(g.id.as_str()))
+                    .count();
+                println!("{:<24} {:<24} {:<6}", s(&g.item, "name"), parent, n);
+            }
+        }
+        GroupCmd::Rm { group } => {
+            let g = get(&c, "group", &group).await?;
+            let parent = g.item["parent_id"].clone();
+            for mut h in list(&c, "host").await? {
+                if h.item["group_id"].as_str() == Some(g.id.as_str()) {
+                    h.item["group_id"] = parent.clone();
+                    put(&c, "host", Some(h.id), h.item).await?;
+                }
+            }
+            for mut sub in list(&c, "group").await? {
+                if sub.item["parent_id"].as_str() == Some(g.id.as_str()) {
+                    sub.item["parent_id"] = parent.clone();
+                    put(&c, "group", Some(sub.id), sub.item).await?;
+                }
+            }
+            rm(&c, "group", &g.id).await?;
+            if !json_out {
+                println!("Removed group `{group}`.");
             }
         }
     }

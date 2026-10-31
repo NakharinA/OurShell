@@ -108,6 +108,22 @@ async fn vault_hosts_exec_sftp_keys_import() {
         e.ok(&["host", "add", "box", &format!("127.0.0.1:{port}"), "--identity", "tester", "--tags", "ci"]);
         let ls = e.ok(&["host", "ls"]);
         assert!(ls.contains("box") && ls.contains("127.0.0.1"));
+        // Groups: subgroups, assigning hosts, removal moves contents up a level.
+        e.ok(&["group", "add", "prod"]);
+        e.ok(&["group", "add", "web", "--parent", "prod"]);
+        e.ok(&["host", "add", "web1", "10.0.0.5", "--group", "web"]);
+        e.ok(&["host", "add", "sw1", "10.0.0.9", "--protocol", "telnet"]);
+        let hosts = e.ok(&["host", "ls"]);
+        assert!(hosts.lines().any(|l| l.starts_with("sw1") && l.contains("telnet") && l.contains("23")));
+        let groups = e.ok(&["group", "ls"]);
+        assert!(groups.lines().any(|l| l.starts_with("web") && l.contains("prod") && l.trim_end().ends_with('1')));
+        e.ok(&["group", "rm", "web"]);
+        let groups = e.ok(&["group", "ls"]);
+        assert!(groups.lines().any(|l| l.starts_with("prod") && l.trim_end().ends_with('1')));
+        assert!(!groups.contains("web"));
+        e.ok(&["host", "rm", "web1"]);
+        e.ok(&["host", "rm", "sw1"]);
+
         // Secrets never leave the agent.
         let shown = e.ok(&["--json", "identity", "ls"]);
         assert!(!shown.contains("\"pw\""));
