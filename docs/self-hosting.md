@@ -13,6 +13,10 @@ Synology NAS install **Container Manager** from the Package Center; on
 Windows and macOS install Docker Desktop). Then run one command on the
 machine that will host the server.
 
+Prefer not to use a terminal? Paste a compose file into Synology Container
+Manager, Portainer or similar instead: see
+[Without the installer: paste a compose file](#without-the-installer-paste-a-compose-file).
+
 **Linux, Synology DSM, macOS**
 
 ```sh
@@ -152,6 +156,82 @@ docker run -d --name ourshell-server --restart unless-stopped \
   ghcr.io/nakharina/ourshell-server:latest
 docker logs ourshell-server     # prints the setup code; then open http://<host>:8443/setup
 ```
+
+### Without the installer: paste a compose file
+
+No terminal needed: Synology Container Manager, Portainer, Unraid, CasaOS
+and similar tools accept this compose file as-is. It runs the server with
+its own PostgreSQL. Change the password in **both** places first.
+
+```yaml
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ourshell
+      POSTGRES_PASSWORD: change-me-to-a-long-random-password
+      POSTGRES_DB: ourshell
+    volumes:
+      - ourshell-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ourshell -d ourshell"]
+      interval: 5s
+      retries: 10
+
+  server:
+    image: ghcr.io/nakharina/ourshell-server:latest
+    container_name: ourshell-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://ourshell:change-me-to-a-long-random-password@postgres:5432/ourshell
+    ports:
+      - "8443:8443"
+    volumes:
+      - ourshell-data:/data
+
+volumes:
+  ourshell-postgres-data:
+  ourshell-data:
+```
+
+Where to paste it:
+
+- **Synology DSM:** Container Manager → **Project** → **Create** → pick
+  "Create docker-compose.yml", paste it, and finish the wizard.
+- **Portainer** (and Unraid/CasaOS stacks): **Stacks** → **Add stack** →
+  paste it → **Deploy the stack**.
+
+Then:
+
+1. Open the `ourshell-server` container's **Log** and copy the setup code
+   (`... enter the setup code XXXX-XXXX-XXXX-XXXX`).
+2. Open `http://<server-address>:8443/setup`, enter the code and finish the
+   wizard (see [The setup wizard](#the-setup-wizard)). **Save the master
+   key** it shows.
+3. Sign up from the OurShell app right away: the first account becomes the
+   owner.
+
+Notes:
+
+- **Already have PostgreSQL?** Run only the `server` service and leave out
+  `DATABASE_URL`: the wizard asks for the database address instead. On
+  Docker Desktop you can do this without a terminal: **Images** →
+  `ghcr.io/nakharina/ourshell-server` → **Run** → *Optional settings*: host
+  port `8443` → container port `8443`, volume `ourshell-data` → `/data`.
+- **HTTPS:** for the built-in Let's Encrypt certificate, also publish
+  `"443:8444"` and enter your domain in the wizard (see
+  [HTTPS with Let's Encrypt](#https-with-lets-encrypt)). On Synology, DSM
+  usually holds port 443, so its built-in reverse proxy is often simpler.
+- **Upgrade:** pull the new image and recreate the container (Synology:
+  select the project → **Action** → **Build**; Portainer: **Update the
+  stack** with "Re-pull image"). Data stays in the two volumes.
+- **Back up** the database (see [Backups](#backups)) and keep a copy of
+  `config.toml` from the `ourshell-data` volume: it holds the master key,
+  without which a database backup can't be restored.
 
 ### Where configuration comes from
 
