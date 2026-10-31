@@ -16,7 +16,7 @@
   import { terminalThemes } from "../../stores/theme";
   import { currentVaultId } from "../../stores/vaultContext";
   import { teams, vaultNames } from "../../stores/teams";
-  import { planIdentityUpdate } from "../../identity";
+  import { passwordToSave, planIdentityUpdate } from "../../identity";
   import { toast, errorText } from "../../stores/toast";
 
   $: state = $hostEditor;
@@ -25,7 +25,10 @@
   let form: Host = emptyHost();
   let tagsText = "";
   let tagInput = "";
+  /** A newly typed password; never the saved one, which stays in the agent. */
   let password = "";
+  /** The host already has a saved password (shown only as "saved"). */
+  let passwordSaved = false;
   let showPassword = false;
   let keyId: string | null = null;
   let existingIdentityId: string | null = null;
@@ -49,6 +52,8 @@
     if (key === lastKey) return;
     lastKey = key;
     password = "";
+    passwordSaved = false;
+    showPassword = false;
     keyId = null;
     existingIdentityId = null;
     error = "";
@@ -59,7 +64,8 @@
       if (existingIdentityId) {
         try {
           const ident = await rpc.itemGet<Identity>({ kind: "identity", id: existingIdentityId });
-          password = ident.item.password ?? "";
+          // The agent only ever says *that* a password is saved.
+          passwordSaved = !!ident.item.password;
           keyId = ident.item.key_id ?? null;
         } catch {
           /* linked identity vanished - leave credentials blank */
@@ -124,7 +130,7 @@
     const plan = planIdentityUpdate({
       hostName: name,
       username: form.username,
-      password,
+      password: passwordToSave(password, passwordSaved),
       keyId,
       existingIdentityId,
     });
@@ -330,14 +336,28 @@
         <div class="input">
           <Icon name="pass" />
           {#if showPassword}
-            <input id="h-pass" bind:value={password} placeholder="••••••••" />
+            <input id="h-pass" bind:value={password} autocomplete="off" placeholder={passwordSaved ? $t("h.passReplace") : "••••••••"} />
           {:else}
-            <input id="h-pass" type="password" bind:value={password} placeholder="••••••••" />
+            <input id="h-pass" type="password" bind:value={password} autocomplete="new-password" placeholder={passwordSaved ? $t("h.passReplace") : "••••••••"} />
           {/if}
-          <button type="button" title={$t("h.show")} on:click={() => (showPassword = !showPassword)}>
-            <Icon name={showPassword ? "eye" : "eyeoff"} size="sm" />
-          </button>
+          {#if password}
+            <!-- Reveals only what's being typed; a saved password is never sent here. -->
+            <button type="button" title={$t("h.show")} on:click={() => (showPassword = !showPassword)}>
+              <Icon name={showPassword ? "eye" : "eyeoff"} size="sm" />
+            </button>
+          {/if}
         </div>
+        {#if passwordSaved && !password}
+          <div class="chips">
+            <span class="chip">
+              <Icon name="shieldok" />
+              <span>{$t("h.passSaved")}</span>
+              <button class="chip-x" aria-label={$t("h.passRemove")} title={$t("h.passRemove")} on:click={() => (passwordSaved = false)}>
+                <Icon name="x" size="sm" />
+              </button>
+            </span>
+          </div>
+        {/if}
       </div>
       <div class="field">
         <span class="lbl">{$t("h.keys")}</span>

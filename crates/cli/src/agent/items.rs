@@ -251,3 +251,55 @@ async fn key_import(state: &Arc<State>, p: KeyImportParams) -> RpcResult {
         json!({"id": id, "public_key": key.public_key_openssh, "fingerprint": key.fingerprint_sha256, "algorithm": key.algorithm}),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ourshell_core::crypto::kdf::KdfParams;
+
+    fn put_identity(v: &mut Vault, id: Option<&str>, password: Option<&str>) -> String {
+        let p = ItemPutParams {
+            kind: "identity".into(),
+            id: id.map(str::to_string),
+            item: json!({ "name": "web", "username": "root", "password": password }),
+        };
+        put::<Identity>(v, &p).unwrap()
+    }
+
+    /// Saved passwords never leave the agent, and sending the redacted
+    /// stand-in back keeps the stored value (the desktop host editor's
+    /// "saved password" state relies on both).
+    #[test]
+    fn saved_passwords_never_leave_the_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = Vault::create_with_kdf(
+            &dir.path().join("v.db"),
+            "pw",
+            true,
+            KdfParams::insecure_for_tests(),
+        )
+        .unwrap()
+        .vault;
+        let id = put_identity(&mut v, None, Some("hunter2-secret"));
+
+        let got = get::<Identity>(&mut v, &id).unwrap();
+        assert_eq!(got.item["password"], "********");
+        let listed = list::<Identity>(&mut v).unwrap();
+        assert!(!serde_json::to_string(&listed).unwrap().contains("hunter2"));
+
+        // Untouched: the stand-in comes back and the real password stays.
+        put_identity(&mut v, Some(&id), Some("********"));
+        assert_eq!(
+            v.get::<Identity>(&id).unwrap().password.as_deref(),
+            Some("hunter2-secret")
+        );
+        // Replaced, then removed.
+        put_identity(&mut v, Some(&id), Some("new-secret"));
+        assert_eq!(
+            v.get::<Identity>(&id).unwrap().password.as_deref(),
+            Some("new-secret")
+        );
+        put_identity(&mut v, Some(&id), None);
+        assert_eq!(v.get::<Identity>(&id).unwrap().password, None);
+    }
+}

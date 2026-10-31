@@ -23,6 +23,23 @@ export type IdentityPlan =
   | { action: "put"; id: string | null; identity: Identity }
   | { action: "clear"; deleteId: string | null };
 
+/**
+ * What the agent sends instead of a stored secret (`redact` in
+ * crates/cli/src/agent/items.rs). Saved passwords never reach the UI;
+ * sending this back in `item.put` tells the agent to keep the stored value.
+ */
+export const REDACTED = "********";
+
+/**
+ * The password field's value to save: a newly typed password replaces the
+ * stored one; an empty field keeps a saved password (as {@link REDACTED})
+ * unless the user removed it.
+ */
+export function passwordToSave(typed: string, saved: boolean): string | null {
+  if (typed) return typed;
+  return saved ? REDACTED : null;
+}
+
 function nonEmpty(s: string | null): string | null {
   const v = s?.trim();
   return v ? v : null;
