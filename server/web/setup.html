@@ -67,13 +67,19 @@
       <input id="public-url" type="url" placeholder="https://sync.example.com">
       <small>Shown on the admin page so you can hand it out. Leave empty if you're not sure yet.</small>
     </label>
-    <label class="check"><input type="checkbox" id="tls-on"> Get a free HTTPS certificate from Let's Encrypt</label>
+    <span class="lbl">How is it reached over HTTPS?</span>
+    <div class="choice" role="radiogroup" id="https-mode">
+      <label><input type="radio" name="https" value="proxy"><span><b>Through my reverse proxy or ingress</b><small>Caddy, nginx, Traefik, Synology reverse proxy, a Kubernetes ingress or Cloudflare Tunnel handles HTTPS and forwards plain HTTP to this server. Recommended if you have one.</small></span></label>
+      <label><input type="radio" name="https" value="tls"><span><b>Built-in HTTPS (Let's Encrypt)</b><small>This server gets and renews its own certificate.</small></span></label>
+      <label><input type="radio" name="https" value="none" checked><span><b>No HTTPS</b><small>Plain HTTP, for a private network or VPN only.</small></span></label>
+    </div>
+    <p class="note info" id="proxy-note" hidden>Point the proxy at this server's HTTP port and have it send <code>X-Forwarded-For</code> and <code>X-Forwarded-Proto</code>. Proxies on this machine, a Docker network or a private network are trusted; others can be added later on the admin page.</p>
     <div id="tls-fields" hidden>
       <div class="row">
         <label class="field"><span>Domain</span><input id="tls-domain" type="text" placeholder="sync.example.com" spellcheck="false"></label>
         <label class="field"><span>Email <span class="locked">optional</span></span><input id="tls-email" type="email" placeholder="you@example.com"></label>
       </div>
-      <p class="note warn">The domain must already point at this server, and port 443 must reach this container from the internet. Skip this if you use your own reverse proxy (Synology, Caddy, nginx, Cloudflare Tunnel).</p>
+      <p class="note warn">The domain must already point at this server, and public port 443 must reach this container's HTTPS port (the installer publishes it on port 3000: forward 443 to 3000 on your router).</p>
     </div>
     <p class="note" id="addr-msg" hidden></p>
     <div class="actions"><button type="button" data-back>Back</button><span class="grow"></span><button class="primary" type="submit">Continue</button></div>

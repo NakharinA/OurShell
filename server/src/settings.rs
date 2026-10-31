@@ -40,6 +40,11 @@ pub struct FileConfig {
     pub admin_password_hash: Option<String>,
     pub oidc: Option<FileOidc>,
     pub tls: Option<FileTls>,
+    /// A reverse proxy / ingress in front terminates HTTPS (see `crate::proxy`).
+    pub behind_proxy: Option<bool>,
+    /// Proxies whose `X-Forwarded-*` headers are believed (IPs or CIDRs);
+    /// empty = loopback and private ranges.
+    pub trusted_proxies: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +116,8 @@ pub const ENV_KEYS: &[(&str, &str)] = &[
     ("session_ttl_hours", "SESSION_TTL_HOURS"),
     ("tls_domain", "OURSHELL_TLS_DOMAIN"),
     ("tls_email", "OURSHELL_TLS_EMAIL"),
+    ("behind_proxy", "OURSHELL_BEHIND_PROXY"),
+    ("trusted_proxies", "OURSHELL_TRUSTED_PROXIES"),
 ];
 
 /// The file config with environment overrides applied, plus which keys the
@@ -144,6 +151,8 @@ pub fn apply_env(file: &FileConfig, env: &dyn Fn(&str) -> Option<String>) -> Res
             "session_ttl_hours" => v.session_ttl_hours = Some(parse_u32(var, &s)?),
             "tls_domain" => v.tls.get_or_insert_with(Default::default).domain = s,
             "tls_email" => v.tls.get_or_insert_with(Default::default).email = Some(s),
+            "behind_proxy" => v.behind_proxy = Some(crate::config::parse_bool(var, &s)?),
+            "trusted_proxies" => v.trusted_proxies = Some(crate::proxy::split_list(&s)),
             _ => unreachable!("every ENV_KEYS entry is handled"),
         }
     }
@@ -260,6 +269,29 @@ mod tests {
         assert_eq!(eff.values.invite_only, Some(true));
         assert_eq!(eff.values.max_devices_per_user, Some(3));
         assert_eq!(eff.env_locked, vec!["database_url", "invite_only"]);
+    }
+
+    #[test]
+    fn proxy_env_vars() {
+        let eff = apply_env(
+            &FileConfig::default(),
+            &env_of(&[
+                ("OURSHELL_BEHIND_PROXY", "true"),
+                ("OURSHELL_TRUSTED_PROXIES", "10.42.0.0/16, 203.0.113.5"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(eff.values.behind_proxy, Some(true));
+        assert_eq!(
+            eff.values.trusted_proxies,
+            Some(vec!["10.42.0.0/16".into(), "203.0.113.5".into()])
+        );
+        assert!(eff.env_locked.contains(&"behind_proxy"));
+        assert!(apply_env(
+            &FileConfig::default(),
+            &env_of(&[("OURSHELL_BEHIND_PROXY", "maybe")])
+        )
+        .is_err());
     }
 
     #[test]

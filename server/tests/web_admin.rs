@@ -447,3 +447,205 @@ async fn admin_page() {
     assert!(csp.contains("script-src 'self'") && !csp.contains("unsafe-inline"));
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// Logs in to the admin page as if over a real socket from `peer`, with
+/// extra headers; returns the status and Set-Cookie.
+async fn login_from(
+    web: &Router,
+    peer: &str,
+    headers: &[(&str, &str)],
+    password: &str,
+) -> (StatusCode, String) {
+    let mut req = Request::post("/admin/api/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-ourshell-admin", "1")
+        .extension(axum::extract::ConnectInfo(
+            peer.parse::<std::net::SocketAddr>().unwrap(),
+        ));
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let body = Body::from(json!({ "password": password }).to_string());
+    let res = web.clone().oneshot(req.body(body).unwrap()).await.unwrap();
+    let cookie = res
+        .headers()
+        .get(header::SET_COOKIE)
+        .map(|v| v.to_str().unwrap().to_string())
+        .unwrap_or_default();
+    (res.status(), cookie)
+}
+
+fn admin_router(
+    app: &common::TestApp,
+    dir: &std::path::Path,
+    env_locked: Vec<&'static str>,
+) -> Router {
+    admin::router(admin::AdminCtx {
+        state: app.state.clone(),
+        data_dir: dir.to_path_buf(),
+        sessions: Arc::new(admin::Sessions::default()),
+        reload: Reload::default(),
+        env_locked: Arc::new(env_locked),
+        tls_status: Arc::new(Default::default()),
+    })
+}
+
+#[tokio::test]
+async fn behind_proxy() {
+    use ourshell_server::proxy::ProxyTrust;
+    let https = [("x-forwarded-proto", "https")];
+
+    // Proxy mode off: forwarding headers are ignored, even from loopback.
+    let hash = password::hash("admin password 1").unwrap();
+    let Some(plain) = common::setup_with(|c| c.admin_password_hash = Some(hash.clone())).await
+    else {
+        return;
+    };
+    let dir = temp_dir();
+    let web = admin_router(&plain, &dir, vec![]);
+    let (s, cookie) = login_from(&web, "127.0.0.1:5000", &https, "admin password 1").await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(!cookie.contains("Secure"), "{cookie}");
+
+    // Proxy mode on, default trusted ranges.
+    let app = common::setup_with(|c| {
+        c.admin_password_hash = Some(hash.clone());
+        c.proxy = ProxyTrust::behind_proxy(&[]).unwrap();
+    })
+    .await
+    .unwrap();
+    let web = admin_router(&app, &dir, vec![]);
+    // HTTPS forwarded by a trusted proxy: Secure cookie.
+    let (s, cookie) = login_from(&web, "172.18.0.1:5000", &https, "admin password 1").await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(cookie.contains("; Secure"), "{cookie}");
+    // The same header straight from the internet is not believed.
+    let (s, cookie) = login_from(&web, "198.51.100.9:5000", &https, "admin password 1").await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(!cookie.contains("Secure"), "{cookie}");
+
+    // The login rate limit (10/min) counts each forwarded client, not the
+    // proxy: one client is throttled, another behind the same proxy isn't.
+    for _ in 0..10 {
+        let (s, _) = login_from(
+            &web,
+            "127.0.0.1:5000",
+            &[("x-forwarded-for", "203.0.113.1")],
+            "wrong",
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+    let (s, _) = login_from(
+        &web,
+        "127.0.0.1:5000",
+        &[("x-forwarded-for", "203.0.113.1")],
+        "wrong",
+    )
+    .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+    let (s, _) = login_from(
+        &web,
+        "127.0.0.1:5000",
+        &[("x-forwarded-for", "203.0.113.2")],
+        "wrong",
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+
+    // Settings: proxy mode and trusted proxies are saved and validated, and
+    // turning proxy mode on drops the built-in HTTPS domain.
+    let (s, cookie) = login_from(
+        &web,
+        "127.0.0.1:5000",
+        &[("x-forwarded-for", "203.0.113.3")],
+        "admin password 1",
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let c = cookie.split(';').next().unwrap().to_string();
+    let (_, body, _) = call(&web, "GET", "/admin/api/settings", Some(&c), false, None).await;
+    assert_eq!(body["settings"]["behind_proxy"], true);
+    let mut new = body["settings"].clone();
+    new["trusted_proxies"] = json!("not-an-ip");
+    let (s, body) = {
+        let (s, b, _) = call(
+            &web,
+            "PUT",
+            "/admin/api/settings",
+            Some(&c),
+            true,
+            Some(new.clone()),
+        )
+        .await;
+        (s, b)
+    };
+    assert_eq!(
+        (s, body["error"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("invalid_trusted_proxies"))
+    );
+    new["trusted_proxies"] = json!("10.42.0.0/16, 203.0.113.5");
+    new["tls_domain"] = json!("sync.example.com");
+    let (s, _, _) = call(
+        &web,
+        "PUT",
+        "/admin/api/settings",
+        Some(&c),
+        true,
+        Some(new),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let file = settings::read(&dir).unwrap();
+    assert_eq!(file.behind_proxy, Some(true));
+    assert_eq!(
+        file.trusted_proxies,
+        Some(vec!["10.42.0.0/16".to_string(), "203.0.113.5".to_string()])
+    );
+    assert_eq!(file.tls, None, "the proxy owns HTTPS");
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[tokio::test]
+async fn setup_wizard_behind_proxy() {
+    if common::setup().await.is_none() {
+        return;
+    }
+    let db_url = std::env::var("TEST_DATABASE_URL")
+        .unwrap_or_else(|_| common::DEFAULT_TEST_DATABASE_URL.to_string());
+    let dir = temp_dir();
+    let app = setup::router(setup::SetupCtx::new(
+        dir.clone(),
+        CODE.into(),
+        Effective::default(),
+        Reload::default(),
+    ));
+    let (s, body, _) = call(
+        &app,
+        "POST",
+        "/setup/api/finish",
+        None,
+        false,
+        Some(json!({
+            "code": CODE,
+            "database_url": db_url,
+            "public_url": "https://sync.example.com",
+            "tls_domain": "sync.example.com",
+            "behind_proxy": true,
+            "signups_enabled": true,
+            "invite_only": true,
+            "admin_password": "a long admin password",
+        })),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{body}");
+    let file = settings::read(&dir).unwrap();
+    assert_eq!(file.behind_proxy, Some(true));
+    assert_eq!(
+        file.tls, None,
+        "behind a proxy, the built-in certificate is off"
+    );
+    let cfg = Config::load(&dir).unwrap().unwrap();
+    assert!(cfg.proxy.enabled() && cfg.tls.is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+}

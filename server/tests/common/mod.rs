@@ -136,6 +136,7 @@ fn test_config(database_url: String) -> Config {
         oidc: None,
         public_url: None,
         tls: None,
+        proxy: Default::default(),
         admin_password_hash: None,
     }
 }

@@ -5,11 +5,12 @@
 //! cross-site form can't.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::extract::{FromRequestParts, Path, State};
+use axum::extract::{ConnectInfo, FromRequestParts, Path, State};
 use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::middleware;
@@ -86,7 +87,7 @@ pub fn router(ctx: AdminCtx) -> Router {
         Router::new()
             .route("/login", post(login))
             .route_layer(middleware::from_fn_with_state(
-                Arc::new(RateLimiter::new(10)),
+                Arc::new(RateLimiter::new(10).with_proxy(ctx.state.config().proxy.clone())),
                 limit_with,
             ));
     let api = Router::new()
@@ -147,17 +148,25 @@ fn session_cookie(value: &str, max_age: u64, secure: bool) -> String {
     )
 }
 
+/// The TCP peer, when the server was reached over a real socket.
+type Peer = Option<Extension<ConnectInfo<SocketAddr>>>;
+
 /// Whether the browser reached us over HTTPS: on the built-in HTTPS
-/// listener (which tags requests with [`ViaTls`]), or via a proxy that says
-/// so. `Secure` cookies would be dropped on plain HTTP, which keeps serving
-/// the LAN even when HTTPS is on, so a configured TLS domain alone isn't
-/// enough.
-fn is_https(headers: &HeaderMap, via_tls: Option<Extension<ViaTls>>) -> bool {
+/// listener (which tags requests with [`ViaTls`]), or through a trusted
+/// reverse proxy that says so (`X-Forwarded-Proto`, believed only in proxy
+/// mode and only from a trusted peer). `Secure` cookies would be dropped on
+/// plain HTTP, which keeps serving the LAN even when HTTPS is on, so a
+/// configured TLS domain alone isn't enough.
+fn is_https(
+    ctx: &AdminCtx,
+    headers: &HeaderMap,
+    via_tls: Option<Extension<ViaTls>>,
+    peer: Peer,
+) -> bool {
     via_tls.is_some()
-        || headers
-            .get("x-forwarded-proto")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.eq_ignore_ascii_case("https"))
+        || peer.is_some_and(|Extension(ConnectInfo(addr))| {
+            ctx.state.config().proxy.forwarded_https(addr.ip(), headers)
+        })
 }
 
 #[derive(Deserialize)]
@@ -168,6 +177,7 @@ struct LoginRequest {
 async fn login(
     State(ctx): State<AdminCtx>,
     via_tls: Option<Extension<ViaTls>>,
+    peer: Peer,
     headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> AppResult<Response> {
@@ -192,7 +202,11 @@ async fn login(
         return Err(AppError::unauthorized("wrong password"));
     }
     let token = ctx.sessions.create();
-    let cookie = session_cookie(&token, SESSION_TTL.as_secs(), is_https(&headers, via_tls));
+    let cookie = session_cookie(
+        &token,
+        SESSION_TTL.as_secs(),
+        is_https(&ctx, &headers, via_tls, peer),
+    );
     Ok(([(header::SET_COOKIE, cookie)], Json(json!({ "ok": true }))).into_response())
 }
 
@@ -200,12 +214,13 @@ async fn logout(
     State(ctx): State<AdminCtx>,
     _: Admin,
     via_tls: Option<Extension<ViaTls>>,
+    peer: Peer,
     headers: HeaderMap,
 ) -> Response {
     if let Some(t) = cookie_token(&headers) {
         ctx.sessions.remove(&t);
     }
-    let cookie = session_cookie("", 0, is_https(&headers, via_tls));
+    let cookie = session_cookie("", 0, is_https(&ctx, &headers, via_tls, peer));
     ([(header::SET_COOKIE, cookie)], Json(json!({ "ok": true }))).into_response()
 }
 
@@ -245,6 +260,10 @@ struct SettingsView {
     session_ttl_hours: u32,
     tls_domain: Option<String>,
     tls_email: Option<String>,
+    /// A reverse proxy / ingress terminates HTTPS.
+    behind_proxy: bool,
+    /// Comma-separated IPs/CIDRs; empty = loopback and private ranges.
+    trusted_proxies: Option<String>,
     oidc_issuer: Option<String>,
     oidc_client_id: Option<String>,
     oidc_redirect_url: Option<String>,
@@ -265,6 +284,11 @@ async fn get_settings(State(ctx): State<AdminCtx>, _: Admin) -> Json<serde_json:
         session_ttl_hours: c.session_ttl_hours as u32,
         tls_domain: c.tls.as_ref().map(|t| t.domain.clone()),
         tls_email: c.tls.as_ref().and_then(|t| t.email.clone()),
+        behind_proxy: c.proxy.enabled(),
+        trusted_proxies: settings::load(&ctx.data_dir)
+            .ok()
+            .and_then(|e| e.values.trusted_proxies)
+            .map(|l| l.join(", ")),
         oidc_issuer: c.oidc.as_ref().map(|o| o.issuer.clone()),
         oidc_client_id: c.oidc.as_ref().map(|o| o.client_id.clone()),
         oidc_redirect_url: c.oidc.as_ref().map(|o| o.redirect_url.clone()),
@@ -320,11 +344,32 @@ async fn put_settings(
     if !locked("session_ttl_hours") {
         file.session_ttl_hours = Some(new.session_ttl_hours);
     }
+    if !locked("trusted_proxies") {
+        let list = clean(new.trusted_proxies)
+            .map(|s| crate::proxy::split_list(&s))
+            .filter(|l| !l.is_empty());
+        if let Some(l) = &list {
+            crate::proxy::ProxyTrust::behind_proxy(l)
+                .map_err(|e| AppError::bad_request("invalid_trusted_proxies", e.to_string()))?;
+        }
+        file.trusted_proxies = list;
+    }
+    if !locked("behind_proxy") {
+        file.behind_proxy = Some(new.behind_proxy);
+    }
+    let behind_proxy = if locked("behind_proxy") {
+        ctx.state.config().proxy.enabled()
+    } else {
+        new.behind_proxy
+    };
     if !locked("tls_domain") && !locked("tls_email") {
-        file.tls = clean(new.tls_domain).map(|domain| FileTls {
-            domain,
-            email: clean(new.tls_email),
-        });
+        // Behind a proxy the proxy owns HTTPS; the built-in certificate is off.
+        file.tls = clean(new.tls_domain)
+            .filter(|_| !behind_proxy)
+            .map(|domain| FileTls {
+                domain,
+                email: clean(new.tls_email),
+            });
     }
     if !locked("oidc") {
         file.oidc = match clean(new.oidc_issuer) {
