@@ -24,7 +24,7 @@
   import { rpc } from "../../rpc";
   import { toast, errorText } from "../../stores/toast";
   import { parseQuickConnect } from "../../quickConnect";
-  import type { Group, Host, ItemRecord } from "../../types";
+  import { isTelnet, type Group, type Host, type ItemRecord } from "../../types";
 
   let searchInput: HTMLInputElement;
   let menu: { kind: "new" | "ctx" | "move"; x: number; y: number; host?: ItemRecord<Host> } | null = null;
@@ -311,6 +311,9 @@
                 {#if h.item.tags.length}· {h.item.tags.join(", ")}{/if}
               </div>
             </span>
+            {#if isTelnet(h.item)}
+              <span class="badge warn" title={$t("h.telnetWarn")}>Telnet</span>
+            {/if}
             {#if h.vault_id && $vaultNames.get(h.vault_id)}
               <span class="badge accent">{$vaultNames.get(h.vault_id)}</span>
             {/if}
@@ -355,9 +358,11 @@
     <button class="menu-item" on:click={doConnectNewTab}>
       <Icon name="plus" /><span>{$t("c.newTab")}</span>
     </button>
-    <button class="menu-item" on:click={doSftp}>
-      <Icon name="folder" /><span>{$t("c.sftp")}</span>
-    </button>
+    {#if !isTelnet(menu.host.item)}
+      <button class="menu-item" on:click={doSftp}>
+        <Icon name="folder" /><span>{$t("c.sftp")}</span>
+      </button>
+    {/if}
     <button class="menu-item" on:click={doRunSnippet}>
       <Icon name="code" /><span>{$t("c.runSnip")}</span>
     </button>

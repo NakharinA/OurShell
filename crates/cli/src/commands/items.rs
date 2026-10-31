@@ -51,6 +51,10 @@ pub struct HostArgs {
 
 #[derive(Args, Default)]
 pub struct HostEditArgs {
+    /// `ssh` (default) or `telnet`. Telnet hosts support `connect` only.
+    #[arg(long, value_parser = ["ssh", "telnet"])]
+    pub protocol: Option<String>,
+    /// Defaults to 22 for SSH, 23 for telnet.
     #[arg(short, long)]
     pub port: Option<u16>,
     #[arg(short, long)]
@@ -167,6 +171,9 @@ async fn apply_edits(
     let mut set = |k: &str, v: Value| {
         obj.insert(k.into(), v);
     };
+    if let Some(p) = &a.protocol {
+        set("protocol", json!(p));
+    }
     if let Some(p) = a.port {
         set("port", json!(p));
     }
@@ -287,7 +294,12 @@ pub async fn host(cmd: HostCmd, json_out: bool) -> Result<()> {
             let mut obj = Map::new();
             obj.insert("name".into(), json!(a.name));
             obj.insert("hostname".into(), json!(hostname));
-            obj.insert("port".into(), json!(port.unwrap_or(22)));
+            let default_port = if a.opts.protocol.as_deref() == Some("telnet") {
+                23
+            } else {
+                22
+            };
+            obj.insert("port".into(), json!(port.unwrap_or(default_port)));
             if let Some(u) = user {
                 obj.insert("username".into(), json!(u));
             }
@@ -311,8 +323,8 @@ pub async fn host(cmd: HostCmd, json_out: bool) -> Result<()> {
             }
             let names = vault_names(&c).await.unwrap_or_default();
             println!(
-                "{:<20} {:<32} {:<6} {:<12} {:<6} {:<12}",
-                "NAME", "ADDRESS", "PORT", "USER", "AI", "VAULT"
+                "{:<20} {:<32} {:<6} {:<6} {:<12} {:<6} {:<12}",
+                "NAME", "ADDRESS", "PROTO", "PORT", "USER", "AI", "VAULT"
             );
             for h in hosts {
                 let i = &h.item;
@@ -323,9 +335,10 @@ pub async fn host(cmd: HostCmd, json_out: bool) -> Result<()> {
                     .map(String::as_str)
                     .unwrap_or("Personal");
                 println!(
-                    "{:<20} {:<32} {:<6} {:<12} {:<6} {:<12}",
+                    "{:<20} {:<32} {:<6} {:<6} {:<12} {:<6} {:<12}",
                     s(i, "name"),
                     s(i, "hostname"),
+                    i["protocol"].as_str().unwrap_or("ssh"),
                     i["port"].as_u64().unwrap_or(22),
                     s(i, "username"),
                     if i["ai_allowed"].as_bool().unwrap_or(false) {

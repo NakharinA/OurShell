@@ -189,9 +189,13 @@ export interface ItemPutParams<T = unknown> {
 // ----- Plaintext item shapes (crates/core/src/vault/model.rs) -----
 // These travel inside ItemRecord.item / ItemPutParams.item as plain JSON.
 
+export type Protocol = "ssh" | "telnet";
+
 export interface Host {
   name: string;
   hostname: string;
+  /** Missing on hosts saved before telnet support: treat as "ssh". */
+  protocol?: Protocol;
   port: number;
   username: string | null;
   identity_id: string | null;
@@ -254,10 +258,18 @@ export interface AuditEntry {
   exit_code: number | null;
 }
 
+/** Telnet hosts get an interactive terminal only: no SFTP, exec, forwarding or AI. */
+export function isTelnet(h: Host): boolean {
+  return h.protocol === "telnet";
+}
+
+export const DEFAULT_PORT: Record<Protocol, number> = { ssh: 22, telnet: 23 };
+
 export function emptyHost(): Host {
   return {
     name: "",
     hostname: "",
+    protocol: "ssh",
     port: 22,
     username: null,
     identity_id: null,

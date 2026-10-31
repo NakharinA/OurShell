@@ -6,7 +6,7 @@
   import Menu from "../ui/Menu.svelte";
   import { t } from "../../i18n";
   import { rpc } from "../../rpc";
-  import type { ForwardKind } from "../../types";
+  import { isTelnet, type ForwardKind } from "../../types";
   import { hosts } from "../../stores/items";
   import { forwardEditorOpen, forwardsVersion } from "../../stores/ui";
   import { toast, errorText } from "../../stores/toast";
@@ -125,7 +125,7 @@
 
 {#if hostPickerOpen}
   <Menu x={px} y={py} onClose={() => (hostPickerOpen = false)}>
-    {#each $hosts as h (h.id)}
+    {#each $hosts.filter((h) => !isTelnet(h.item)) as h (h.id)}
       <button class="menu-item" on:click={() => { viaHost = h.item.name; hostPickerOpen = false; }}>
         <Icon name="hosts" /><span>{h.item.name}</span>
       </button>
