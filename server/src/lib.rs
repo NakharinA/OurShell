@@ -17,8 +17,10 @@ pub mod routes;
 pub mod settings;
 pub mod sqlx;
 pub mod state;
+pub mod tls;
 pub mod web;
 
+use std::future::IntoFuture;
 use std::net::SocketAddr;
 use std::path::Path;
 
@@ -87,12 +89,21 @@ pub async fn run() -> Result<()> {
     ));
     tracing::info!(%addr, data_dir = %data_dir.display(), "ourshell-server listening");
 
+    // Optional built-in HTTPS (see `tls`): its socket is bound the first
+    // time a generation needs it and then shared like `listener`.
+    let env = |k: &str| std::env::var(k).ok();
+    let mut tls_socket = tls::TlsSocket::new(tls::bind_addr(&env)?);
+    let acme_staging = tls::acme_staging(&env);
+    let tls_status = std::sync::Arc::new(tls::TlsStatus::default());
+
     let reload = web::Reload::default();
     let sessions = std::sync::Arc::new(web::admin::Sessions::default());
     loop {
         let effective = settings::load(&data_dir)?;
-        let mut changed = reload.subscribe();
-        let app = match Config::from_effective(&effective)? {
+        let changed = reload.subscribe();
+        let config = Config::from_effective(&effective)?;
+        let wanted_tls = tls::wanted(config.as_ref());
+        let app = match config {
             Some(config) => {
                 let state = build_state(config).await?;
                 routes::build_router(state.clone()).merge(web::admin::router(
@@ -102,6 +113,7 @@ pub async fn run() -> Result<()> {
                         sessions: sessions.clone(),
                         reload: reload.clone(),
                         env_locked: std::sync::Arc::new(effective.env_locked.clone()),
+                        tls_status: tls_status.clone(),
                     },
                 ))
             }
@@ -119,16 +131,40 @@ pub async fn run() -> Result<()> {
                 ))
             }
         };
+        // Started per generation, so a changed or removed TLS domain takes
+        // effect on reload; dropping it stops the ACME renewal task.
+        let mut tls_gen = tls::start(
+            &mut tls_socket,
+            wanted_tls.as_ref(),
+            &data_dir,
+            acme_staging,
+            &tls_status,
+        )
+        .await;
+        let shutdown = |mut changed: tokio::sync::watch::Receiver<u64>| async move {
+            let _ = changed.changed().await;
+        };
         // `tap_io` (a no-op) because axum provides `SocketAddr` connect
         // info, which the rate limiter needs, for `TapIo` listeners.
-        axum::serve(
+        let http = axum::serve(
             listener.clone().tap_io(|_| {}),
-            app.into_make_service_with_connect_info::<SocketAddr>(),
+            app.clone()
+                .into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with_graceful_shutdown(async move {
-            let _ = changed.changed().await;
-        })
-        .await?;
+        .with_graceful_shutdown(shutdown(changed.clone()));
+        match tls_gen.listener.take() {
+            Some(tls_listener) => {
+                let https = axum::serve(
+                    tls_listener.tap_io(|_| {}),
+                    app.layer(axum::Extension(tls::ViaTls))
+                        .into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .with_graceful_shutdown(shutdown(changed));
+                tokio::try_join!(http.into_future(), https.into_future())?;
+            }
+            None => http.await?,
+        }
+        drop(tls_gen);
         tracing::info!("configuration changed; reloading");
     }
 }
