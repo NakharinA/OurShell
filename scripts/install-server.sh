@@ -52,8 +52,20 @@ Options (every option also has an interactive prompt):
       --database-url URL  postgres://user:password@host:5432/db (with --db existing);
                           localhost/127.0.0.1/::1 are rewritten to host.docker.internal
       --port PORT         Host port for the server's HTTP listener (default 8443)
-      --domain DOMAIN     Get a Let's Encrypt certificate for DOMAIN and serve HTTPS on 443
+      --listen ADDR       Host address the HTTP port is published on (default: every
+                          interface); 127.0.0.1 = reachable only from this machine,
+                          e.g. through a reverse proxy running here
+      --behind-proxy      Run behind your own reverse proxy / ingress / Cloudflare
+                          Tunnel, which handles HTTPS (plain HTTP only here)
+      --trusted-proxies LIST
+                          With --behind-proxy: comma-separated proxy IPs/CIDRs whose
+                          X-Forwarded-For/-Proto are trusted (default: loopback and
+                          private networks)
+      --domain DOMAIN     Get a Let's Encrypt certificate for DOMAIN and serve HTTPS
+                          (not with --behind-proxy). Let's Encrypt always connects to
+                          port 443: forward public TCP 443 to --https-port
       --email EMAIL       Contact email for Let's Encrypt (with --domain)
+      --https-port PORT   With --domain: host port for built-in HTTPS (default 3000)
       --public-url URL    Address clients use, e.g. https://sync.example.com
       --image REF         Server image (default ghcr.io/nakharina/ourshell-server:<version>)
       --project NAME      Docker Compose project name (default ourshell)
@@ -211,7 +223,11 @@ reexec_sudo() { # REASON
   [ -n "$DB" ] && set -- "$@" --db "$DB"
   [ -n "$DATABASE_URL_IN" ] && set -- "$@" --database-url "$DATABASE_URL_IN"
   [ -n "$PORT" ] && set -- "$@" --port "$PORT"
+  [ -n "$LISTEN" ] && set -- "$@" --listen "$LISTEN"
+  [ "$BEHIND_PROXY" = 1 ] && set -- "$@" --behind-proxy
+  [ -n "$TRUSTED_PROXIES" ] && set -- "$@" --trusted-proxies "$TRUSTED_PROXIES"
   [ -n "$DOMAIN" ] && set -- "$@" --domain "$DOMAIN"
+  [ -n "$HTTPS_PORT" ] && set -- "$@" --https-port "$HTTPS_PORT"
   [ -n "$EMAIL" ] && set -- "$@" --email "$EMAIL"
   [ -n "$PUBLIC_URL_IN" ] && set -- "$@" --public-url "$PUBLIC_URL_IN"
   [ -n "$IMAGE" ] && set -- "$@" --image "$IMAGE"
@@ -298,7 +314,9 @@ dc() {
 
 # --- generated files ---------------------------------------------------------
 
-# write_compose USE_NEW_DB(0|1) USE_TLS(0|1)
+# write_compose USE_NEW_DB(0|1) USE_TLS(0|1) LISTEN_SET(0|1)
+# LISTEN_SET=1 publishes the HTTP port only on OURSHELL_LISTEN from .env;
+# otherwise Docker's default (every IPv4 and IPv6 interface) applies.
 write_compose() {
   _tmp="$DIR/docker-compose.yml.tmp.$$"
   {
@@ -327,11 +345,16 @@ EOF
     volumes:
       - ourshell-data:/data
     ports:
-      - "${OURSHELL_HTTP_PORT:-8443}:8443"
 EOF
+    # shellcheck disable=SC2016 # literal: Compose expands it
+    if [ "$3" = 1 ]; then
+      printf '%s\n' '      - "${OURSHELL_LISTEN:-0.0.0.0}:${OURSHELL_HTTP_PORT:-8443}:8443"'
+    else
+      printf '%s\n' '      - "${OURSHELL_HTTP_PORT:-8443}:8443"'
+    fi
     if [ "$2" = 1 ]; then
       # shellcheck disable=SC2016 # literal: Compose expands it
-      printf '%s\n' '      - "${OURSHELL_HTTPS_PORT:-443}:8444"'
+      printf '%s\n' '      - "${OURSHELL_HTTPS_PORT:-3000}:8444"'
     fi
     if [ "$1" = 1 ]; then
       cat <<'EOF'
@@ -415,7 +438,7 @@ wait_healthy() {
   HEALTH=""; HEALTH_MODE=""
   _i=0
   while [ "$_i" -lt 60 ]; do
-    if HEALTH="$(http_get "http://127.0.0.1:$PORT/v1/health")"; then
+    if HEALTH="$(http_get "http://$(local_host):$PORT/v1/health")"; then
       HEALTH_MODE="$(printf '%s' "$HEALTH" | sed -n 's/.*"mode" *: *"\([a-z]*\)".*/\1/p')"
       [ -n "$HEALTH_MODE" ] || HEALTH_MODE="ready"
       ok "health: $HEALTH"
@@ -433,14 +456,26 @@ wait_healthy() {
     _i=$((_i + 1))
     sleep 2
   done
-  warn "the server didn't answer on http://127.0.0.1:$PORT/v1/health within 120 seconds. Last log lines:"
+  warn "the server didn't answer on http://$(local_host):$PORT/v1/health within 120 seconds. Last log lines:"
   dc logs --tail 40 server >&2 || true
   return 1
 }
 
+# The address this machine reaches the published HTTP port on.
+local_host() {
+  case "$LISTEN" in
+    ''|0.0.0.0|'[::]') printf '127.0.0.1' ;;
+    *) printf '%s' "$LISTEN" ;;
+  esac
+}
+
 print_box() { # MODE(setup|ready)
-  _ip="$(lan_ip)"
-  _base="http://$_ip:$PORT"
+  case "$LISTEN" in
+    ''|0.0.0.0|'[::]') _base="http://$(lan_ip):$PORT" ;;
+    *) _base="http://$LISTEN:$PORT" ;;
+  esac
+  _via=""
+  case "$PUBLIC_URL_IN" in https://*) _via="${PUBLIC_URL_IN%/}" ;; esac
   printf '\n%s' "$B"
   printf '%s\n' "=================================================================="
   if [ "$1" = setup ]; then
@@ -448,6 +483,9 @@ print_box() { # MODE(setup|ready)
     printf '%s\n' "=================================================================="
     printf '%s' "$N"
     printf '\n  Open:        %s/setup#code=%s\n' "$_base" "$CODE"
+    if [ "$BEHIND_PROXY" = 1 ] && [ -n "$_via" ]; then
+      printf '               or through your proxy: %s/setup#code=%s\n' "$_via" "$CODE"
+    fi
     printf '  Setup code:  %s\n' "$CODE"
     printf '\n  The wizard asks for the database (already filled in), the address\n'
     printf '  clients use, sign-up rules and an /admin password, then shows the\n'
@@ -459,8 +497,20 @@ print_box() { # MODE(setup|ready)
     printf '\n  Server:      %s\n' "$_base"
     printf '  Admin page:  %s/admin\n' "$_base"
   fi
-  if [ -n "$DOMAIN" ]; then
-    printf '  HTTPS:       https://%s (certificate is requested on first start)\n' "$DOMAIN"
+  if [ "$BEHIND_PROXY" = 1 ]; then
+    printf '\n  Proxy:       point your reverse proxy at %s (plain HTTP);\n' "$_base"
+    printf '               it handles HTTPS and must pass Host, X-Forwarded-For\n'
+    printf '               and X-Forwarded-Proto: https.\n'
+    if [ -n "$_via" ]; then
+      printf '  Public URL:  %s\n' "$_via"
+    fi
+  elif [ -n "$DOMAIN" ]; then
+    printf '\n  HTTPS:       https://%s (certificate is requested on first start)\n' "$DOMAIN"
+    if [ "$HTTPS_PORT" != 443 ]; then
+      printf "               Let's Encrypt connects to port 443: forward public TCP 443 on\n"
+      printf "               your router/firewall to port %s here, or the certificate\n" "$HTTPS_PORT"
+      printf '               cannot be issued. Without the forward: https://%s:%s\n' "$DOMAIN" "$HTTPS_PORT"
+    fi
   fi
   printf '\n  Install dir: %s\n' "$DIR"
   printf '  Logs:        cd %s && docker compose logs -f server\n' "$DIR"
@@ -508,14 +558,28 @@ do_upgrade() {
   PORT="$(env_get "$_env" OURSHELL_HTTP_PORT)"; PORT="${PORT:-8443}"
   DOMAIN="$(env_get "$_env" OURSHELL_TLS_DOMAIN)"
   CODE="$(env_get "$_env" OURSHELL_SETUP_CODE)"
+  LISTEN="$(env_get "$_env" OURSHELL_LISTEN)"
+  PUBLIC_URL_IN="$(env_get "$_env" PUBLIC_URL)"
+  BEHIND_PROXY=0
+  case "$(env_get "$_env" OURSHELL_BEHIND_PROXY)" in [tT]rue|TRUE|1|[yY]es|on) BEHIND_PROXY=1 ;; esac
   _newdb=0; [ -n "$(env_get "$_env" POSTGRES_PASSWORD)" ] && _newdb=1
-  _tls=0; [ -n "$DOMAIN" ] && _tls=1
+  # Behind a proxy the server ignores a TLS domain: don't publish HTTPS.
+  _tls=0; [ -n "$DOMAIN" ] && [ "$BEHIND_PROXY" != 1 ] && _tls=1
+  HTTPS_PORT="$(env_get "$_env" OURSHELL_HTTPS_PORT)"
+  if [ "$_tls" = 1 ] && [ -z "$HTTPS_PORT" ]; then
+    # Older installs published HTTPS on host port 443 without writing the
+    # port down; the compose default is now 3000, so pin 443 for them rather
+    # than silently moving their HTTPS port.
+    HTTPS_PORT=443
+    env_set "$_env" OURSHELL_HTTPS_PORT 443
+  fi
+  _listen=0; [ -n "$LISTEN" ] && _listen=1
 
   say "Upgrading OurShell in $DIR: $_old -> $_new"
   env_set "$_env" OURSHELL_IMAGE "$_new"
   env_set "$_env" COMPOSE_PROJECT_NAME "$PROJECT"
   cp "$DIR/docker-compose.yml" "$DIR/docker-compose.yml.bak"
-  write_compose "$_newdb" "$_tls"
+  write_compose "$_newdb" "$_tls" "$_listen"
   install_backup_script
   pull_images "$_newdb"
   dc up -d --remove-orphans
@@ -540,6 +604,16 @@ pull_images() { # USE_NEW_DB
     fi
   fi
   if [ "$1" = 1 ]; then dc pull postgres || warn "couldn't pull postgres:17; trying the local copy"; fi
+}
+
+# Validates LISTEN (an IP address; IPv6 gets the brackets Compose needs).
+check_listen() {
+  [ -n "$LISTEN" ] || return 0
+  case "$LISTEN" in
+    *[!0-9A-Fa-f.:\[\]]*) die "--listen takes an IP address such as 127.0.0.1 or 0.0.0.0 (got $LISTEN)" ;;
+    \[*) ;;
+    *:*) LISTEN="[$LISTEN]" ;;
+  esac
 }
 
 do_install() {
@@ -579,16 +653,86 @@ do_install() {
   # Network.
   if [ -z "$PORT" ]; then ask "HTTP port on this machine" 8443; PORT="$ANSWER"; fi
   case "$PORT" in ''|*[!0-9]*) die "--port must be a number" ;; esac
-  if [ -z "$DOMAIN" ] && [ "$YES" != 1 ]; then
-    ask "Domain for HTTPS with Let's Encrypt (needs port 443 reachable from the internet; empty = plain HTTP)" ""
-    DOMAIN="$ANSWER"
+  if [ -n "$DOMAIN" ]; then
+    _https=3
+  elif [ "$BEHIND_PROXY" = 1 ]; then
+    _https=2
+  elif [ "$YES" = 1 ]; then
+    _https=1
+  else
+    say "How will clients reach the server?"
+    printf '  1) plain HTTP on your LAN or VPN (no HTTPS)\n' >/dev/tty
+    printf '  2) behind my own reverse proxy / ingress / Cloudflare Tunnel, which handles\n' >/dev/tty
+    printf '     HTTPS -- recommended if you already have one (Caddy, nginx, Traefik,\n' >/dev/tty
+    printf "     Kubernetes, Synology's reverse proxy ...)\n" >/dev/tty
+    printf "  3) built-in HTTPS with a Let's Encrypt certificate (needs a domain and\n" >/dev/tty
+    printf '     public port 443 forwarded to this machine)\n' >/dev/tty
+    ask "Choose 1, 2 or 3" 1
+    _https="$ANSWER"
+  fi
+  case "$_https" in
+    1) ;;
+    2)
+      BEHIND_PROXY=1
+      if [ -z "$LISTEN" ] && [ "$YES" != 1 ]; then
+        if confirm "Does the proxy run directly on this machine (not in another container)? Then the server listens on 127.0.0.1 only" y; then
+          LISTEN=127.0.0.1
+        fi
+      fi
+      if [ -z "$PUBLIC_URL_IN" ] && [ "$YES" != 1 ]; then
+        ask "Public HTTPS address the proxy serves, e.g. https://sync.example.com (empty = decide in the setup wizard)" ""
+        PUBLIC_URL_IN="$ANSWER"
+      fi
+      if [ -z "$TRUSTED_PROXIES" ] && [ "$YES" != 1 ]; then
+        ask "Proxy IPs/CIDRs to trust for X-Forwarded-* headers, comma-separated (empty = loopback and private networks)" ""
+        TRUSTED_PROXIES="$ANSWER"
+      fi
+      ;;
+    3)
+      if [ -z "$DOMAIN" ]; then
+        ask "Domain for the Let's Encrypt certificate (its DNS must point at this host)" ""
+        DOMAIN="$ANSWER"
+        [ -n "$DOMAIN" ] || die "built-in HTTPS needs a domain."
+      fi
+      if [ -z "$HTTPS_PORT" ] && [ "$YES" != 1 ]; then
+        ask "Host port for HTTPS (forward public TCP 443 on your router to it; 443 = no forward needed)" 3000
+        HTTPS_PORT="$ANSWER"
+      fi
+      ;;
+    *) die "please choose 1, 2 or 3." ;;
+  esac
+  [ "$BEHIND_PROXY" = 1 ] && [ -z "$LISTEN" ] && LISTEN=0.0.0.0
+  check_listen
+  TRUSTED_PROXIES="$(printf '%s' "$TRUSTED_PROXIES" | tr -d ' ')"
+  case "$TRUSTED_PROXIES" in
+    *[!0-9A-Fa-f.:/,]*) die "--trusted-proxies takes comma-separated IP addresses or CIDRs, e.g. 10.0.0.0/8,192.168.1.5" ;;
+  esac
+  if [ -n "$TRUSTED_PROXIES" ] && [ "$BEHIND_PROXY" != 1 ]; then
+    warn "--trusted-proxies only matters with --behind-proxy; ignoring it."
+    TRUSTED_PROXIES=""
+  fi
+  if [ "$BEHIND_PROXY" = 1 ]; then
+    case "$PUBLIC_URL_IN" in
+      ''|https://*) ;;
+      *) warn "behind a proxy that handles HTTPS, the public URL is normally https://... (got $PUBLIC_URL_IN)." ;;
+    esac
   fi
   if [ -n "$DOMAIN" ] && [ -z "$EMAIL" ] && [ "$YES" != 1 ]; then
     ask "Email for Let's Encrypt expiry notices (optional)" ""
     EMAIL="$ANSWER"
   fi
-  if [ -n "$DOMAIN" ] && [ "$PLATFORM" = synology ]; then
-    warn "DSM's own web server usually holds port 443. Free it, or set OURSHELL_HTTPS_PORT in $DIR/.env and forward 443 to it on your router."
+  if [ -n "$DOMAIN" ]; then
+    HTTPS_PORT="${HTTPS_PORT:-3000}"
+    case "$HTTPS_PORT" in ''|*[!0-9]*) die "--https-port must be a number" ;; esac
+    [ "$HTTPS_PORT" = "$PORT" ] && die "the HTTP and HTTPS ports must differ (both are $PORT)."
+    if [ "$HTTPS_PORT" != 443 ]; then
+      warn "Let's Encrypt always connects to port 443: forward public TCP 443 on your router/firewall to port $HTTPS_PORT on this host, or the certificate can't be issued."
+    elif [ "$PLATFORM" = synology ]; then
+      warn "DSM's own web server usually holds port 443. Free it, or use the default HTTPS port 3000 and forward 443 to it on your router."
+    fi
+  elif [ -n "$HTTPS_PORT" ]; then
+    warn "--https-port only matters with built-in HTTPS (--domain); ignoring it."
+    HTTPS_PORT=""
   fi
   _default_url=""; [ -n "$DOMAIN" ] && _default_url="https://$DOMAIN"
   if [ -z "$PUBLIC_URL_IN" ]; then
@@ -619,7 +763,17 @@ do_install() {
       env_line OURSHELL_SETUP_CODE "$CODE"
       [ -n "$PUBLIC_URL_IN" ] && env_line PUBLIC_URL "$PUBLIC_URL_IN"
       [ -n "$DOMAIN" ] && env_line OURSHELL_TLS_DOMAIN "$DOMAIN"
+      [ -n "$DOMAIN" ] && env_line OURSHELL_HTTPS_PORT "$HTTPS_PORT"
       [ -n "$EMAIL" ] && env_line OURSHELL_TLS_EMAIL "$EMAIL"
+      if [ "$BEHIND_PROXY" = 1 ]; then
+        printf '# Behind a reverse proxy that terminates HTTPS (plain HTTP only here).\n'
+        env_line OURSHELL_BEHIND_PROXY true
+        [ -n "$TRUSTED_PROXIES" ] && env_line OURSHELL_TRUSTED_PROXIES "$TRUSTED_PROXIES"
+      fi
+      if [ -n "$LISTEN" ]; then
+        printf '# Host address the HTTP port is published on (127.0.0.1 = this machine only).\n'
+        env_line OURSHELL_LISTEN "$LISTEN"
+      fi
       env_line RUST_LOG info
     } >"$_tmp"
   )
@@ -627,7 +781,8 @@ do_install() {
   mv -f "$_tmp" "$DIR/.env"
   _newdb=0; [ "$DB" = new ] && _newdb=1
   _tls=0; [ -n "$DOMAIN" ] && _tls=1
-  write_compose "$_newdb" "$_tls"
+  _listen=0; [ -n "$LISTEN" ] && _listen=1
+  write_compose "$_newdb" "$_tls" "$_listen"
   install_backup_script
   ok "wrote docker-compose.yml, .env and backup.sh"
 
@@ -641,8 +796,9 @@ do_install() {
 # --- main --------------------------------------------------------------------
 
 main() {
-  YES=0; DIR=""; DB=""; DATABASE_URL_IN=""; PORT=""; DOMAIN=""; EMAIL=""
+  YES=0; DIR=""; DB=""; DATABASE_URL_IN=""; PORT=""; DOMAIN=""; EMAIL=""; HTTPS_PORT=""
   PUBLIC_URL_IN=""; IMAGE=""; PROJECT=""; MODE=""; PURGE=0
+  BEHIND_PROXY=0; TRUSTED_PROXIES=""; LISTEN=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -650,7 +806,7 @@ main() {
     esac
     case "$1" in
       -y|--yes) YES=1 ;;
-      --dir|--db|--database-url|--port|--domain|--email|--public-url|--image|--project)
+      --dir|--db|--database-url|--port|--domain|--email|--public-url|--image|--project|--listen|--trusted-proxies|--https-port)
         [ $# -ge 2 ] || die "$1 needs a value"
         case "$1" in
           --dir) DIR="$2" ;;
@@ -662,8 +818,12 @@ main() {
           --public-url) PUBLIC_URL_IN="$2" ;;
           --image) IMAGE="$2" ;;
           --project) PROJECT="$2" ;;
+          --listen) LISTEN="$2" ;;
+          --https-port) HTTPS_PORT="$2" ;;
+          --trusted-proxies) TRUSTED_PROXIES="$2" ;;
         esac
         shift ;;
+      --behind-proxy) BEHIND_PROXY=1 ;;
       --upgrade) MODE=upgrade ;;
       --uninstall) MODE=uninstall ;;
       --purge) PURGE=1 ;;
@@ -673,6 +833,9 @@ main() {
     shift
   done
   [ "$PURGE" = 1 ] && [ "$MODE" != uninstall ] && die "--purge only goes with --uninstall"
+  if [ "$BEHIND_PROXY" = 1 ] && [ -n "$DOMAIN" ]; then
+    die "--behind-proxy and --domain don't go together: behind a reverse proxy, the proxy handles HTTPS. Drop --domain (and set up the certificate on your proxy), or drop --behind-proxy to use the built-in Let's Encrypt certificate."
+  fi
   PROJECT="${PROJECT:-ourshell}"
   case "$PROJECT" in *[!a-z0-9_-]*|'') die "--project may only contain lowercase letters, digits, - and _" ;; esac
   # `ourshell-server` for the default project; an install under another

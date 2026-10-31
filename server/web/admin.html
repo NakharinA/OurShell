@@ -99,7 +99,11 @@
           <label class="field" data-key="rate_limit_per_min"><span>Sign-in attempts per minute per IP</span><input name="rate_limit_per_min" type="number" min="0"><small>0 = unlimited</small></label>
           <label class="field" data-key="session_ttl_hours"><span>Session lifetime (hours)</span><input name="session_ttl_hours" type="number" min="1"></label>
         </div>
-        <h2 class="gap">HTTPS (Let's Encrypt)</h2>
+        <h2 class="gap">Reverse proxy / ingress</h2>
+        <p class="hint">Turn this on when Caddy, nginx, Traefik, a Synology reverse proxy, a Kubernetes ingress or Cloudflare Tunnel terminates HTTPS in front of this server. It then believes <code>X-Forwarded-For</code> / <code>X-Forwarded-Proto</code> from trusted proxies only, and built-in HTTPS is off.</p>
+        <label class="check" data-key="behind_proxy"><input name="behind_proxy" type="checkbox"> Behind a reverse proxy or ingress</label>
+        <label class="field" data-key="trusted_proxies"><span>Trusted proxies</span><input name="trusted_proxies" type="text" placeholder="empty = this machine and private networks" spellcheck="false"><small>Comma-separated IPs or CIDR ranges, e.g. <code>10.42.0.0/16, 203.0.113.5</code>.</small></label>
+        <h2 class="gap">Built-in HTTPS (Let's Encrypt)</h2>
         <div class="row">
           <label class="field" data-key="tls_domain"><span>Domain</span><input name="tls_domain" type="text" placeholder="empty = plain HTTP"></label>
           <label class="field" data-key="tls_email"><span>Email</span><input name="tls_email" type="email"></label>

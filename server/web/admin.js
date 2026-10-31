@@ -151,7 +151,20 @@ async function loadSettings() {
       (wrap.querySelector("span") || wrap).append(tag);
     }
   }
+  syncProxyFields();
 }
+
+/** Behind a proxy, the proxy owns HTTPS: the built-in certificate fields are off. */
+function syncProxyFields() {
+  const f = $("#settings").elements;
+  const proxy = f.behind_proxy.checked;
+  for (const name of ["tls_domain", "tls_email"]) {
+    const locked = envLocked.some((k) => k.startsWith("tls_"));
+    f[name].disabled = proxy || locked;
+  }
+  f.trusted_proxies.disabled = !proxy || envLocked.includes("trusted_proxies");
+}
+$("#settings").elements.behind_proxy.addEventListener("change", syncProxyFields);
 
 $("#settings").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -166,6 +179,8 @@ $("#settings").addEventListener("submit", async (e) => {
     session_ttl_hours: num("session_ttl_hours"),
     tls_domain: f.tls_domain.value.trim() || null,
     tls_email: f.tls_email.value.trim() || null,
+    behind_proxy: f.behind_proxy.checked,
+    trusted_proxies: f.trusted_proxies.value.trim() || null,
     oidc_issuer: f.oidc_issuer.value.trim() || null,
     oidc_client_id: f.oidc_client_id.value.trim() || null,
     oidc_client_secret: f.oidc_client_secret.value || null,

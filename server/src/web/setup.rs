@@ -21,6 +21,7 @@ use serde_json::json;
 use super::{password, Reload, VERSION};
 use crate::config;
 use crate::error::{AppError, AppResult};
+use crate::proxy::ProxyTrust;
 use crate::rate_limit::{limit_with, RateLimiter};
 use crate::settings::{self, Effective, FileTls};
 use crate::sqlx::PgPoolOptions;
@@ -47,6 +48,21 @@ impl SetupCtx {
         }
     }
 
+    /// Proxy mode as configured so far (usually by the installer), so the
+    /// wizard's own rate limit sees real client addresses too.
+    fn proxy_trust(&self) -> ProxyTrust {
+        let v = &self.effective.values;
+        if !v.behind_proxy.unwrap_or(false) {
+            return ProxyTrust::off();
+        }
+        ProxyTrust::behind_proxy(v.trusted_proxies.as_deref().unwrap_or_default()).unwrap_or_else(
+            |e| {
+                tracing::warn!(error = %e, "ignoring invalid trusted proxies during setup");
+                ProxyTrust::behind_proxy(&[]).unwrap_or_default()
+            },
+        )
+    }
+
     fn env_database_url(&self) -> Option<&str> {
         self.effective
             .env_locked
@@ -62,7 +78,7 @@ pub fn router(ctx: SetupCtx) -> Router {
         .route("/test-db", post(test_db))
         .route("/finish", post(finish))
         .route_layer(middleware::from_fn_with_state(
-            Arc::new(RateLimiter::new(20)),
+            Arc::new(RateLimiter::new(20).with_proxy(ctx.proxy_trust())),
             limit_with,
         ))
         .route("/info", get(info));
@@ -121,6 +137,8 @@ async fn info(State(ctx): State<SetupCtx>) -> Json<serde_json::Value> {
         "database": ctx.env_database_url().map(super::redact_database_url),
         "tls_domain": ctx.effective.values.tls.as_ref().map(|t| t.domain.clone()).filter(|d| !d.is_empty()),
         "public_url": ctx.effective.values.public_url,
+        "behind_proxy": ctx.effective.values.behind_proxy.unwrap_or(false),
+        "behind_proxy_from_env": ctx.effective.env_locked.contains(&"behind_proxy"),
     }))
 }
 
@@ -194,6 +212,9 @@ struct FinishRequest {
     public_url: Option<String>,
     tls_domain: Option<String>,
     tls_email: Option<String>,
+    /// A reverse proxy / ingress handles HTTPS (excludes `tls_domain`).
+    #[serde(default)]
+    behind_proxy: bool,
     signups_enabled: bool,
     invite_only: bool,
     max_devices_per_user: Option<u32>,
@@ -264,10 +285,21 @@ async fn finish(
         Some(key)
     };
     file.public_url = public_url;
-    file.tls = clean(body.tls_domain).map(|domain| FileTls {
-        domain,
-        email: clean(body.tls_email),
-    });
+    if !ctx.effective.env_locked.contains(&"behind_proxy") {
+        file.behind_proxy = Some(body.behind_proxy);
+    }
+    let behind_proxy = ctx
+        .effective
+        .values
+        .behind_proxy
+        .filter(|_| ctx.effective.env_locked.contains(&"behind_proxy"))
+        .unwrap_or(body.behind_proxy);
+    file.tls = clean(body.tls_domain)
+        .filter(|_| !behind_proxy)
+        .map(|domain| FileTls {
+            domain,
+            email: clean(body.tls_email),
+        });
     file.signups_enabled = Some(body.signups_enabled);
     file.invite_only = Some(body.invite_only);
     file.max_devices_per_user = body.max_devices_per_user;

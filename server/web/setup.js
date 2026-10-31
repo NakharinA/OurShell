@@ -27,9 +27,12 @@ async function init() {
     }
     if (state.info.public_url) $("#public-url").value = state.info.public_url;
     if (state.info.tls_domain) {
-      $("#tls-on").checked = true;
       $("#tls-domain").value = state.info.tls_domain;
-      $("#tls-fields").hidden = false;
+      setHttpsMode("tls");
+    }
+    if (state.info.behind_proxy) setHttpsMode("proxy");
+    if (state.info.behind_proxy_from_env) {
+      for (const r of $$("input[name=https]")) r.disabled = true;
     }
   } catch (e) {
     // Already set up: the server now serves the admin page instead.
@@ -87,13 +90,19 @@ $("#f-db").addEventListener("submit", (e) => {
   if (state.dbOk) go(2);
 });
 
-$("#tls-on").addEventListener("change", (e) => {
-  $("#tls-fields").hidden = !e.currentTarget.checked;
-});
+function httpsMode() {
+  return $("input[name=https]:checked").value;
+}
+function setHttpsMode(mode) {
+  $(`input[name=https][value=${mode}]`).checked = true;
+  $("#tls-fields").hidden = mode !== "tls";
+  $("#proxy-note").hidden = mode !== "proxy";
+}
+for (const r of $$("input[name=https]")) r.addEventListener("change", () => setHttpsMode(httpsMode()));
 $("#f-addr").addEventListener("submit", (e) => {
   e.preventDefault();
   const url = $("#public-url").value.trim();
-  if ($("#tls-on").checked && !$("#tls-domain").value.trim()) {
+  if (httpsMode() === "tls" && !$("#tls-domain").value.trim()) {
     note($("#addr-msg"), "err", "Enter the domain for the certificate, or turn HTTPS off.");
     return;
   }
@@ -119,13 +128,14 @@ $("#f-admin").addEventListener("submit", async (e) => {
     return;
   }
   const policy = $("input[name=policy]:checked").value;
-  const tlsOn = $("#tls-on").checked;
+  const tlsOn = httpsMode() === "tls";
   const body = {
     code: state.code,
     database_url: $("#db-url").value.trim() || null,
     public_url: $("#public-url").value.trim() || null,
     tls_domain: tlsOn ? $("#tls-domain").value.trim() : null,
     tls_email: tlsOn ? $("#tls-email").value.trim() || null : null,
+    behind_proxy: httpsMode() === "proxy",
     signups_enabled: policy !== "closed",
     invite_only: policy === "invite",
     max_devices_per_user: Number($("#max-devices").value || 0),

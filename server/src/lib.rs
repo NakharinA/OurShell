@@ -12,6 +12,7 @@ pub mod crypto;
 pub mod db;
 pub mod error;
 pub mod oidc;
+pub mod proxy;
 pub mod rate_limit;
 pub mod routes;
 pub mod settings;

@@ -161,3 +161,4 @@ td.mono { font-family: var(--mono); }
 .empty { color: var(--text-3); text-align: center; padding: 18px 0; }
 footer { color: var(--text-3); font-size: 12.5px; text-align: center; margin-top: 24px; }
 .card h2.gap { margin-top: 18px; }
+span.lbl { display: block; font-weight: 600; font-size: 13px; margin-bottom: 6px; }

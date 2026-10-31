@@ -56,7 +56,11 @@ or as PowerShell parameters (`& ([scriptblock]::Create((irm <url>))) -Yes -Db ne
 | `--db new\|existing` | `-Db new\|existing` | bundled PostgreSQL (default) or your own |
 | `--database-url URL` | `-DatabaseUrl URL` | with `existing`: `postgres://user:pw@host:5432/db` |
 | `--port N` | `-Port N` | host port for HTTP (default `8443`) |
-| `--domain D` / `--email E` | `-Domain D` / `-Email E` | HTTPS with a Let's Encrypt certificate on port 443 |
+| `--listen ADDR` | `-Listen ADDR` | host address the HTTP port is published on (default: every interface); `127.0.0.1` = reachable only from this machine, e.g. through a reverse proxy running here |
+| `--behind-proxy` | `-BehindProxy` | run behind your own reverse proxy / ingress / Cloudflare Tunnel, which handles HTTPS (see [Behind a reverse proxy or ingress](#behind-a-reverse-proxy-or-ingress)); not with `--domain` |
+| `--trusted-proxies LIST` | `-TrustedProxies LIST` | with `--behind-proxy`: comma-separated proxy IPs/CIDRs (default: loopback and private networks) |
+| `--domain D` / `--email E` | `-Domain D` / `-Email E` | built-in HTTPS with a Let's Encrypt certificate (see [HTTPS with Let's Encrypt](#https-with-lets-encrypt)) |
+| `--https-port N` | `-HttpsPort N` | with `--domain`: host port for built-in HTTPS (default `3000`; forward public TCP 443 to it) |
 | `--public-url URL` | `-PublicUrl URL` | the address clients use |
 | `--image REF` | `-Image REF` | a different server image |
 | `--project NAME` | `-Project NAME` | Docker Compose project name (default `ourshell`) |
@@ -70,8 +74,23 @@ container), so PostgreSQL must listen on an address containers can reach
 database: the server creates its own tables. The installer checks the
 connection with a throwaway `postgres:17` container before it starts.
 
-For HTTPS (`--domain`), see the "HTTPS with Let's Encrypt" section. On
-Synology, DSM's own web server normally holds port 443.
+Without `--yes`, the installer asks how clients reach the server:
+**(1)** plain HTTP on your LAN or VPN, **(2)** behind your own reverse
+proxy, ingress or Cloudflare Tunnel, which handles HTTPS -- the
+recommended choice if you already run one -- or **(3)** built-in HTTPS with
+a Let's Encrypt certificate. For (2) it also asks whether the proxy runs
+directly on this machine (then the server is published on `127.0.0.1`
+only), the public `https://` address and, optionally, the proxies to
+trust. Example:
+
+```sh
+curl -fsSL .../install-server.sh | sh -s -- --yes --db new \
+  --behind-proxy --listen 127.0.0.1 --public-url https://sync.example.com
+```
+
+`--listen`, `--https-port` and `--port` end up in `.env` as
+`OURSHELL_LISTEN`, `OURSHELL_HTTPS_PORT` and `OURSHELL_HTTP_PORT`; they
+only change the port mappings in `docker-compose.yml`, not the server.
 
 ### The setup wizard
 
@@ -83,9 +102,15 @@ one-time **setup code** for you; it is also in `.env`
 1. **Setup code** -- proves you're the person who installed the server.
 2. **Database** -- already filled in (and locked) when the installer set
    `DATABASE_URL`; otherwise enter a PostgreSQL URL and test it.
-3. **Address** -- the URL clients will use (`https://sync.example.com`,
-   or `http://<lan-ip>:8443` at home), and optionally a domain for
-   Let's Encrypt.
+3. **Address** -- the URL clients will use, and how HTTPS is handled, one
+   of three choices:
+   - **plain HTTP** on your LAN or VPN (`http://<lan-ip>:8443`);
+   - **behind a reverse proxy or ingress** that handles HTTPS (Caddy,
+     nginx, Traefik, Dokploy, Kubernetes, Synology, Cloudflare Tunnel ...): enter
+     the proxy's `https://` address, see
+     [Behind a reverse proxy or ingress](#behind-a-reverse-proxy-or-ingress);
+   - **built-in Let's Encrypt**: enter a domain (and optionally an email),
+     see [HTTPS with Let's Encrypt](#https-with-lets-encrypt).
 4. **Sign-ups** -- open sign-ups, invite-only, or closed, and the
    per-account device limit.
 5. **Admin password** -- at least 10 characters, for the `/admin` page.
@@ -103,7 +128,8 @@ issue an invite). Every signup after that follows the normal policy.
 ### The admin page
 
 `http://<server>:8443/admin`, signed in with the admin password, lets you
-change the address, sign-up policy, device limit, OIDC and TLS settings,
+change the address, sign-up policy, device limit, OIDC and TLS settings
+(including "Behind a reverse proxy or ingress" and its trusted proxies),
 list users (disable/enable them), create invite codes, and change the admin
 password. Settings that come from environment variables are shown
 read-only. Forgot the password? Set a new one with
@@ -188,6 +214,9 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://ourshell:change-me-to-a-long-random-password@postgres:5432/ourshell
+      # Optional, behind your own reverse proxy / ingress that handles HTTPS:
+      # OURSHELL_BEHIND_PROXY: "true"
+      # PUBLIC_URL: https://sync.example.com
     ports:
       - "8443:8443"
     volumes:
@@ -222,10 +251,17 @@ Notes:
   Docker Desktop you can do this without a terminal: **Images** →
   `ghcr.io/nakharina/ourshell-server` → **Run** → *Optional settings*: host
   port `8443` → container port `8443`, volume `ourshell-data` → `/data`.
-- **HTTPS:** for the built-in Let's Encrypt certificate, also publish
-  `"443:8444"` and enter your domain in the wizard (see
-  [HTTPS with Let's Encrypt](#https-with-lets-encrypt)). On Synology, DSM
-  usually holds port 443, so its built-in reverse proxy is often simpler.
+- **HTTPS**, two options:
+  - **Your own reverse proxy** (on Synology, DSM's built-in one is often
+    simplest): uncomment `OURSHELL_BEHIND_PROXY` and `PUBLIC_URL` above and
+    point the proxy at port 8443 (see
+    [Behind a reverse proxy or ingress](#behind-a-reverse-proxy-or-ingress)).
+    If the proxy runs on the same machine, `"127.0.0.1:8443:8443"` keeps
+    the plain-HTTP port off the network.
+  - **Built-in Let's Encrypt:** also publish `"3000:8444"`, enter your
+    domain in the wizard and forward public TCP 443 on your router to port
+    3000 of this machine (see [HTTPS with Let's Encrypt](#https-with-lets-encrypt)).
+    Port 3000 doesn't collide with DSM's own 443.
 - **Upgrade:** pull the new image and recreate the container (Synology:
   select the project → **Action** → **Build**; Portainer: **Update the
   stack** with "Re-pull image"). Data stays in the two volumes.
@@ -276,6 +312,8 @@ wizard instead of the API.
 | `OURSHELL_DATA_DIR` | no | `/data` in the image, `./data` otherwise | where `config.toml` lives |
 | `OURSHELL_SETUP_CODE` | no | generated, printed in the log | one-time code for `/setup` (the installer sets it) |
 | `OURSHELL_TLS_DOMAIN` / `OURSHELL_TLS_EMAIL` | no | unset | HTTPS via Let's Encrypt, see "HTTPS with Let's Encrypt" |
+| `OURSHELL_BEHIND_PROXY` | no | `false` | `true` = behind a reverse proxy / ingress that terminates HTTPS; see "Behind a reverse proxy or ingress" |
+| `OURSHELL_TRUSTED_PROXIES` | no | loopback + private ranges | comma-separated IPs/CIDRs whose `X-Forwarded-*` headers are trusted (only with `OURSHELL_BEHIND_PROXY`) |
 | `OPAQUE_SERVER_SETUP` | no | generated once, persisted encrypted in `server_setup` | only set by hand to restore one explicitly |
 | `SIGNUPS_ENABLED` | no | `true` | |
 | `INVITE_ONLY` | no | `false` | |
@@ -305,7 +343,279 @@ only **identifies** the user; the master password still unlocks the vault
 over OPAQUE afterward, same as a normal login. If unset, both routes answer
 `501 Not Implemented`.
 
+## Behind a reverse proxy or ingress
+
+This is one of the two ways to serve OurShell over HTTPS; the other is the
+server's own certificate, see [HTTPS with Let's Encrypt](#https-with-lets-encrypt).
+Use this one when you already run something that terminates TLS -- Caddy,
+nginx, Traefik, a Kubernetes ingress, Synology DSM's reverse proxy,
+Cloudflare Tunnel, a cloud load balancer -- or when port 443 is taken. The
+container then serves **plain HTTP only** on port 8443 and the proxy
+handles HTTPS. It can't be combined with the built-in Let's Encrypt
+certificate: if both are set, the server ignores the TLS domain and logs a
+warning.
+
+### Turning it on
+
+- **Setup wizard:** in the Address step, under "How is it reached over
+  HTTPS?", choose **Through my reverse proxy or ingress**.
+- **/admin:** Settings → **Behind a reverse proxy or ingress**, plus the
+  **Trusted proxies** list. Saving applies it immediately (the server
+  reloads in place, no restart).
+- **Environment:** `OURSHELL_BEHIND_PROXY=true` (`behind_proxy` in
+  `config.toml`).
+- **Installer:** `--behind-proxy` (`-BehindProxy`), or choice 2 when it
+  asks. Add `--listen 127.0.0.1` when the proxy runs directly on the same
+  machine, so the plain-HTTP port is reachable only through the proxy.
+- Set **`PUBLIC_URL`** to the external address, e.g.
+  `https://sync.example.com`, so /admin and the setup screens show the
+  address clients should use.
+
+In this mode the server trusts two headers, **but only on connections from
+a trusted proxy**:
+
+- `X-Forwarded-For` -- the client's IP, used for the per-IP sign-in rate
+  limit. The client is the right-most address in the header that isn't a
+  trusted proxy.
+- `X-Forwarded-Proto` -- `https` marks the /admin session cookie `Secure`.
+
+Trusted proxies come from `OURSHELL_TRUSTED_PROXIES` (`trusted_proxies` in
+`config.toml`; installer `--trusted-proxies`): a comma-separated list of
+IPs and CIDRs, e.g. `10.0.0.0/8,192.168.1.5`. Unset, it is loopback plus
+the private ranges: `127.0.0.0/8`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`, `fc00::/7` -- which covers a proxy on the same host, in
+another Docker container, or on your LAN. If port 8443 is also reachable
+from other machines on those networks, narrow the list to your proxy's
+address (and publish 8443 on `127.0.0.1` or firewall it) so nobody can
+bypass the proxy and fake the headers. Without `OURSHELL_BEHIND_PROXY`
+both headers are ignored.
+
+### What the proxy must do
+
+- Forward to `http://<server>:8443` (the host port you published; plain
+  HTTP).
+- Pass the `Host` header through and set `X-Forwarded-For` and
+  `X-Forwarded-Proto: https`.
+- Allow request bodies of at least **1 MiB** (more headroom doesn't
+  hurt).
+- Nothing else: no WebSocket or streaming support is needed.
+- Health checks: `GET /v1/health` answers 200 with JSON whose `mode` is
+  `setup` (wizard not finished yet) or `ready`.
+
+The setup wizard works through the proxy too
+(`https://sync.example.com/setup`), or directly on port 8443 from the
+machine itself.
+
+### Caddy
+
+Caddy gets its own certificate and sets `X-Forwarded-For` and
+`X-Forwarded-Proto` itself; `Host` is passed through unchanged:
+
+```caddyfile
+sync.example.com {
+    reverse_proxy 127.0.0.1:8443
+}
+```
+
+### nginx
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name sync.example.com;
+    ssl_certificate     /etc/letsencrypt/live/sync.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/sync.example.com/privkey.pem;
+
+    client_max_body_size 16m;   # nginx's default (1m) is too tight
+
+    location / {
+        proxy_pass http://127.0.0.1:8443;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+```
+
+### Traefik (Docker labels)
+
+With Traefik running in Docker, put the server on Traefik's network and
+let Traefik reach container port 8443 directly; the server then needs no
+published port at all. Traefik sets `X-Forwarded-For`/`-Proto` and keeps
+`Host` by default, and Docker network addresses are in the default
+trusted ranges. Adjust the entry point and certificate resolver names to
+your Traefik configuration:
+
+```yaml
+services:
+  server:
+    image: ghcr.io/nakharina/ourshell-server:latest
+    environment:
+      OURSHELL_BEHIND_PROXY: "true"
+      PUBLIC_URL: https://sync.example.com
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.ourshell.rule=Host(`sync.example.com`)
+      - traefik.http.routers.ourshell.entrypoints=websecure
+      - traefik.http.routers.ourshell.tls.certresolver=letsencrypt
+      - traefik.http.services.ourshell.loadbalancer.server.port=8443
+```
+
+### Kubernetes (ingress-nginx)
+
+A Service on port 8443 and an Ingress in front of it. ingress-nginx sets
+the `X-Forwarded-*` headers; its default body limit is 1m, so raise it:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ourshell
+spec:
+  selector:
+    app: ourshell
+  ports:
+    - name: http
+      port: 8443
+      targetPort: 8443
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ourshell
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 16m
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [sync.example.com]
+      secretName: ourshell-tls
+  rules:
+    - host: sync.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ourshell
+                port:
+                  number: 8443
+```
+
+In the Deployment's container (with a PersistentVolumeClaim at `/data`):
+
+```yaml
+        env:
+          - name: OURSHELL_BEHIND_PROXY
+            value: "true"
+          - name: PUBLIC_URL
+            value: https://sync.example.com
+          # Only if your pod/ingress network isn't in a default private range:
+          # - name: OURSHELL_TRUSTED_PROXIES
+          #   value: 100.64.0.0/10
+        ports:
+          - containerPort: 8443
+        readinessProbe:
+          httpGet: { path: /v1/health, port: 8443 }
+        livenessProbe:
+          httpGet: { path: /v1/health, port: 8443 }
+          periodSeconds: 30
+```
+
+Most clusters use private pod CIDRs (`10.x`, `172.16-31.x`), which are
+trusted by default; if yours uses something else (e.g. `100.64.0.0/10`),
+set `OURSHELL_TRUSTED_PROXIES` to the ingress controller's pod CIDR. To
+see real client IPs (rather than a cloud load balancer's) in front of
+ingress-nginx, the controller itself must preserve them, e.g. with
+`externalTrafficPolicy: Local` on its Service; see the ingress-nginx
+documentation. For several replicas, see
+[Running multiple replicas](#running-multiple-replicas).
+
+### Dokploy
+
+Dokploy runs Traefik in front of every app, and Traefik handles HTTPS and the
+certificate. Deploy the image as an **Application** (Docker image
+`ghcr.io/nakharina/ourshell-server:latest`) or as part of a **Docker
+Compose** project, then:
+
+- **Domains:** add your domain with **Container Port `8443`**, HTTPS on,
+  certificate Let's Encrypt. Clients then use `https://your-domain`, with
+  no port.
+- **Don't use port 443 as the Container Port.** It's the port Traefik
+  listens on outside; nothing listens on 443 inside the container, so
+  Traefik answers **502 Bad Gateway**.
+- **Ports:** no published ports are needed; Traefik reaches the container
+  over Dokploy's network.
+- **Environment:** `OURSHELL_BEHIND_PROXY=true` and
+  `PUBLIC_URL=https://your-domain`, plus `DATABASE_URL` (or enter it in the
+  setup wizard). Don't set `OURSHELL_TLS_DOMAIN`: Traefik owns the
+  certificate. Dokploy's network is a private range, which is trusted by
+  default.
+- **Volume:** mount a volume at `/data`.
+- **Docker Compose projects:** attach the server to Dokploy's network so
+  Traefik can see it (otherwise 502 or 404):
+
+  ```yaml
+  services:
+    server:
+      # ... image, environment, volumes as in the compose file above
+      networks: [default, dokploy-network]
+  networks:
+    dokploy-network:
+      external: true
+  ```
+
+The setup code is in the app's **Logs** tab; open `https://your-domain/setup`.
+
+### Synology DSM reverse proxy
+
+Run the server with the installer (`--behind-proxy --listen 127.0.0.1`)
+or the [compose file](#without-the-installer-paste-a-compose-file) with
+`OURSHELL_BEHIND_PROXY: "true"`, then in DSM:
+
+1. **Control Panel → Login Portal → Advanced → Reverse Proxy → Create.**
+2. **Source:** protocol **HTTPS**, hostname `sync.example.com`, port
+   **443**.
+3. **Destination:** protocol **HTTP**, hostname `localhost`, port
+   **8443**.
+4. Assign a certificate for the hostname under **Control Panel →
+   Security → Certificate** (DSM can get one from Let's Encrypt).
+5. If the rule doesn't send `X-Forwarded-Proto` already, add it on the
+   rule's **Custom Header** tab: `X-Forwarded-Proto` = `https`.
+
+Then sign in to `https://sync.example.com/admin` and check that the
+session sticks and that the browser's developer tools list the admin
+cookie as **Secure**; if not, `X-Forwarded-Proto` isn't reaching the
+server. DSM versions differ in which headers they add by default, so
+verify rather than assume. If large syncs fail with `413 Request Entity
+Too Large`, the reverse proxy's body limit is too small for your vault.
+
+### Cloudflare Tunnel
+
+Run `cloudflared` on the same host and give the tunnel's public hostname
+the service URL `http://localhost:8443` (in the Zero Trust dashboard, or
+in `config.yml`):
+
+```yaml
+ingress:
+  - hostname: sync.example.com
+    service: http://localhost:8443
+  - service: http_status:404
+```
+
+Cloudflare terminates HTTPS and sets `X-Forwarded-For` and
+`X-Forwarded-Proto`; `cloudflared` connects from `127.0.0.1`, which is
+trusted by default, and the server can be published on `127.0.0.1` only.
+If `cloudflared` runs in a container, `localhost` is that container: use
+`http://ourshell-server:8443` on a shared Docker network instead.
+
 ## HTTPS with Let's Encrypt
+
+This is the other HTTPS option: the server gets its own certificate, with
+no proxy in front. If you already run a reverse proxy, ingress or
+Cloudflare Tunnel, use that instead, see
+[Behind a reverse proxy or ingress](#behind-a-reverse-proxy-or-ingress).
 
 The server can get and renew its own certificate from Let's Encrypt. Set a
 domain on the admin page (or `OURSHELL_TLS_DOMAIN`, plus optionally
@@ -322,11 +632,20 @@ Requirements:
 - **DNS**: an A (and/or AAAA) record for the domain pointing at the host's
   public address.
 - **Port 443**: Let's Encrypt validates with the TLS-ALPN-01 challenge,
-  which connects to port 443 on that address. The container runs as a
-  non-root user, so it listens on 8444 instead: forward host port 443 to
-  container port 8444 (e.g. `ports: ["443:8444"]` in `docker-compose.yml`,
-  plus a router port forward if the host is behind NAT). Port 80 is not
-  needed.
+  which always connects to **public port 443** on that address. The
+  container runs as a non-root user, so it listens on 8444; the installer
+  publishes that on host port **3000** by default (`OURSHELL_HTTPS_PORT`,
+  `--https-port`; `ports: ["3000:8444"]` in `docker-compose.yml`). So
+  **forward public TCP 443 on your router/firewall to port 3000 of this
+  host**, or the certificate can't be issued. If nothing else on the host
+  uses 443, you can publish `443:8444` instead (`--https-port 443`) and
+  skip the forward. Clients then use `https://<your domain>` (port 443 via
+  the forward), or `https://<your domain>:3000` when they reach the host
+  directly without it. Port 80 is not needed. (Installs made before the
+  default changed keep host port 443: the installer writes
+  `OURSHELL_HTTPS_PORT=443` into their `.env` when upgrading.) On
+  Synology, 3000 doesn't collide with DSM's own 443 -- only the router
+  forward 443 → 3000 is needed.
 - **Persistent data dir**: the ACME account key and certificates are cached
   in `<data dir>/acme` (`$OURSHELL_DATA_DIR`, `/data` in the Docker image).
   Keep it on a volume; otherwise every restart orders a new certificate and
@@ -341,9 +660,8 @@ The admin page's status shows `tls_status` ("waiting for certificate",
 lines). Renewal happens automatically in the background.
 
 Prefer your own reverse proxy (Caddy, nginx, Traefik, a cloud load
-balancer)? Leave the domain empty and terminate TLS there, forwarding to
-`BIND_ADDR` over plain HTTP and setting `X-Forwarded-Proto: https`, which
-the admin page uses to mark its session cookie `Secure`.
+balancer)? Leave the domain empty and see
+[Behind a reverse proxy or ingress](#behind-a-reverse-proxy-or-ingress).
 
 ## Connecting clients
 
@@ -591,6 +909,9 @@ replicas behind a load balancer with no sticky sessions required, as long
 as they share one `DATABASE_URL` and `SERVER_MASTER_KEY`. Only the rate
 limiter is per-replica (acceptable: worst case a client gets a slightly
 higher effective rate limit than configured, never a security issue).
+Set `OURSHELL_BEHIND_PROXY=true` on every replica so the limiter sees the
+client's IP rather than the load balancer's (see
+[Behind a reverse proxy or ingress](#behind-a-reverse-proxy-or-ingress)).
 
 ## Dependency note: why there's no NASM/aws-lc-sys
 

@@ -113,6 +113,7 @@ pub async fn start() -> Option<TestServer> {
         oidc: None,
         public_url: None,
         tls: None,
+        proxy: Default::default(),
         admin_password_hash: None,
     };
 

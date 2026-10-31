@@ -29,7 +29,8 @@ struct Inner {
 impl AppState {
     pub async fn new(pool: PgPool, config: Config) -> Result<Self> {
         let server_setup = load_or_create_server_setup(&pool, &config).await?;
-        let rate_limiter = RateLimiter::new(config.rate_limit_per_min);
+        let rate_limiter =
+            RateLimiter::new(config.rate_limit_per_min).with_proxy(config.proxy.clone());
         let oidc = match &config.oidc {
             Some(cfg) => Some(OidcClient::discover(cfg).await?),
             None => None,

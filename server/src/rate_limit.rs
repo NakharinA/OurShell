@@ -15,6 +15,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
 use crate::error::AppError;
+use crate::proxy::ProxyTrust;
 use crate::state::AppState;
 
 /// Applied only to the auth endpoints (`register/*`, `login/*`). When the
@@ -50,10 +51,11 @@ pub async fn limit_with(
 }
 
 fn check(limiter: &RateLimiter, request: &Request<Body>) -> Option<Response> {
-    let ip = request
+    let peer = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0.ip())?;
+    let ip = limiter.proxy.client_ip(peer, request.headers());
     (!limiter.allow(ip)).then(|| {
         AppError::new(
             StatusCode::TOO_MANY_REQUESTS,
@@ -71,6 +73,8 @@ struct Bucket {
 
 pub struct RateLimiter {
     limit_per_min: u32,
+    /// Behind a proxy, limits apply to the forwarded client, not the proxy.
+    proxy: ProxyTrust,
     buckets: Mutex<HashMap<IpAddr, Bucket>>,
 }
 
@@ -78,8 +82,16 @@ impl RateLimiter {
     pub fn new(limit_per_min: u32) -> Self {
         Self {
             limit_per_min,
+            proxy: ProxyTrust::off(),
             buckets: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Limits by the client a trusted proxy forwards for, rather than the
+    /// proxy's own address.
+    pub fn with_proxy(mut self, proxy: ProxyTrust) -> Self {
+        self.proxy = proxy;
+        self
     }
 
     /// Returns `true` if the request from `ip` is allowed under the current

@@ -10,6 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
+use crate::proxy::ProxyTrust;
 use crate::settings::{self, Effective};
 
 pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8443";
@@ -30,6 +31,9 @@ pub struct Config {
     pub public_url: Option<String>,
     /// Serve HTTPS with a Let's Encrypt certificate for this domain.
     pub tls: Option<TlsConfig>,
+    /// Behind a reverse proxy / ingress: which `X-Forwarded-*` headers to
+    /// believe. [`ProxyTrust::off`] otherwise.
+    pub proxy: ProxyTrust,
     /// Argon2id hash guarding the `/admin` page; `None` disables it.
     pub admin_password_hash: Option<String>,
 }
@@ -85,7 +89,7 @@ impl Config {
                 client_secret: o.client_secret,
                 redirect_url: o.redirect_url,
             });
-        let tls = v
+        let mut tls = v
             .tls
             .clone()
             .filter(|t| !t.domain.is_empty())
@@ -93,6 +97,18 @@ impl Config {
                 domain: t.domain,
                 email: t.email.filter(|e| !e.is_empty()),
             });
+        let proxy = if v.behind_proxy.unwrap_or(false) {
+            // The proxy terminates HTTPS, so the built-in certificate is off.
+            if let Some(t) = tls.take() {
+                tracing::warn!(
+                    domain = %t.domain,
+                    "behind a reverse proxy: ignoring the built-in HTTPS domain"
+                );
+            }
+            ProxyTrust::behind_proxy(v.trusted_proxies.as_deref().unwrap_or_default())?
+        } else {
+            ProxyTrust::off()
+        };
         Ok(Some(Self {
             database_url,
             bind_addr: v
@@ -108,6 +124,7 @@ impl Config {
             oidc,
             public_url: v.public_url.clone().filter(|s| !s.is_empty()),
             tls,
+            proxy,
             admin_password_hash: v.admin_password_hash.clone().filter(|s| !s.is_empty()),
         }))
     }
