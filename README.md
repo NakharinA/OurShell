@@ -41,6 +41,20 @@ The CLI starts a local agent (`ourshell agent`) on demand. It holds the unlocked
 vault, auto-locks after 15 idle minutes, and exits when idle and locked. The
 desktop app and the MCP server talk to the same agent.
 
+## Installing on macOS
+
+Release builds aren't notarized by Apple yet, so the first launch is blocked:
+
+1. Open the DMG and drag **OurShell** to Applications.
+2. Open it once; macOS says it "could not verify" OurShell. Click **Done**.
+3. Go to **System Settings → Privacy & Security**, scroll down, click **Open Anyway** next to OurShell, and confirm.
+
+If macOS instead says OurShell **"is damaged and can't be opened"** (builds from v0.6.0 and earlier), the app is fine; it's just unsigned. Clear the download quarantine flag and open it normally:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/OurShell.app
+```
+
 ## Updating
 
 Updates only ever come from [GitHub Releases](https://github.com/NakharinA/OurShell/releases) on this repository.
