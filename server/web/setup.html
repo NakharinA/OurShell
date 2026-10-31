@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up OurShell server</title>
+<link rel="icon" href="/web/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/web/app.css">
+<script src="/web/common.js" defer></script>
+<script src="/web/setup.js" defer></script>
+</head>
+<body>
+<main class="shell">
+  <header class="brand">
+    <img src="/web/logo.svg" alt="">
+    <div>
+      <h1>Set up your OurShell server</h1>
+      <p>Sync server <span id="version"></span></p>
+    </div>
+  </header>
+
+  <nav class="steps" aria-label="Setup steps">
+    <span data-step="0">1 · Unlock</span>
+    <span data-step="1">2 · Database</span>
+    <span data-step="2">3 · Address</span>
+    <span data-step="3">4 · Sign-ups</span>
+    <span data-step="4">5 · Admin</span>
+    <span data-step="5">6 · Done</span>
+  </nav>
+
+  <form class="card" data-panel="0" id="f-code">
+    <h2>Enter the setup code</h2>
+    <p class="lead">This proves you're the person installing the server. The installer printed it, and it's also in the server log (<code>docker logs ourshell-server</code>).</p>
+    <label class="field">
+      <span>Setup code</span>
+      <input class="code" id="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" required>
+    </label>
+    <p class="note" id="code-msg" hidden></p>
+    <div class="actions"><button class="primary" type="submit">Continue</button></div>
+  </form>
+
+  <form class="card" data-panel="1" id="f-db" hidden>
+    <h2>Database</h2>
+    <p class="lead">OurShell stores its data in PostgreSQL. Everything users sync is encrypted on their devices first, so the database only ever holds ciphertext.</p>
+    <div id="db-env" hidden>
+      <p class="note info">The installer already configured the database: <b id="db-env-name"></b></p>
+    </div>
+    <label class="field" id="db-input">
+      <span>PostgreSQL URL</span>
+      <input id="db-url" type="text" autocomplete="off" spellcheck="false" placeholder="postgres://ourshell:password@db.example.com:5432/ourshell">
+      <small>The user needs permission to create tables. A <code>localhost</code> address means this container, not your computer; use <code>host.docker.internal</code> for a database on the Docker host.</small>
+    </label>
+    <p class="note" id="db-msg" hidden></p>
+    <div class="actions">
+      <button type="button" data-back>Back</button>
+      <span class="grow"></span>
+      <button type="button" id="db-test">Test connection</button>
+      <button class="primary" type="submit" id="db-next" disabled>Continue</button>
+    </div>
+  </form>
+
+  <form class="card" data-panel="2" id="f-addr" hidden>
+    <h2>Server address</h2>
+    <p class="lead">The address people enter in the OurShell app (Account &amp; sync → Server).</p>
+    <label class="field">
+      <span>Public URL <span class="locked">optional</span></span>
+      <input id="public-url" type="url" placeholder="https://sync.example.com">
+      <small>Shown on the admin page so you can hand it out. Leave empty if you're not sure yet.</small>
+    </label>
+    <label class="check"><input type="checkbox" id="tls-on"> Get a free HTTPS certificate from Let's Encrypt</label>
+    <div id="tls-fields" hidden>
+      <div class="row">
+        <label class="field"><span>Domain</span><input id="tls-domain" type="text" placeholder="sync.example.com" spellcheck="false"></label>
+        <label class="field"><span>Email <span class="locked">optional</span></span><input id="tls-email" type="email" placeholder="you@example.com"></label>
+      </div>
+      <p class="note warn">The domain must already point at this server, and port 443 must reach this container from the internet. Skip this if you use your own reverse proxy (Synology, Caddy, nginx, Cloudflare Tunnel).</p>
+    </div>
+    <p class="note" id="addr-msg" hidden></p>
+    <div class="actions"><button type="button" data-back>Back</button><span class="grow"></span><button class="primary" type="submit">Continue</button></div>
+  </form>
+
+  <form class="card" data-panel="3" id="f-signup" hidden>
+    <h2>Who can create an account?</h2>
+    <p class="lead">The first account anyone creates becomes the server's <b>owner</b>, so sign up yourself right after setup.</p>
+    <div class="choice" role="radiogroup">
+      <label><input type="radio" name="policy" value="invite" checked><span><b>Invite only</b><small>New accounts need an invite code from the admin page. Recommended for a server reachable from the internet.</small></span></label>
+      <label><input type="radio" name="policy" value="open"><span><b>Anyone</b><small>Anyone who can reach the server can sign up. Fine on a private network.</small></span></label>
+      <label><input type="radio" name="policy" value="closed"><span><b>Nobody (just me)</b><small>Only the first account can be created.</small></span></label>
+    </div>
+    <label class="field">
+      <span>Devices per account</span>
+      <input id="max-devices" type="number" min="0" value="10">
+      <small>0 = unlimited.</small>
+    </label>
+    <div class="actions"><button type="button" data-back>Back</button><span class="grow"></span><button class="primary" type="submit">Continue</button></div>
+  </form>
+
+  <form class="card" data-panel="4" id="f-admin" hidden>
+    <h2>Admin password</h2>
+    <p class="lead">Protects this server's admin page (<code>/admin</code>), where you change settings, create invites and manage users. It's separate from your OurShell account.</p>
+    <div class="row">
+      <label class="field"><span>Password</span><input id="pw" type="password" autocomplete="new-password" minlength="10" required></label>
+      <label class="field"><span>Confirm</span><input id="pw2" type="password" autocomplete="new-password" minlength="10" required></label>
+    </div>
+    <p class="hint">At least 10 characters.</p>
+    <p class="note" id="admin-msg" hidden></p>
+    <div class="actions"><button type="button" data-back>Back</button><span class="grow"></span><button class="primary" type="submit" id="finish">Finish setup</button></div>
+  </form>
+
+  <section class="card" data-panel="5" hidden>
+    <h2>Your server is ready</h2>
+    <div id="key-box" hidden>
+      <p class="note warn"><b>Save this master key somewhere safe.</b> It encrypts this server's data at rest. Database backups can't be restored without it, and it's not shown again.</p>
+      <div class="secret" id="master-key"></div>
+      <div class="actions">
+        <button type="button" id="copy-key">Copy key</button>
+        <button type="button" id="dl-config">Download config backup</button>
+      </div>
+    </div>
+    <p class="note info" id="restart-msg">Starting the server…</p>
+    <h2 class="gap">Next steps</h2>
+    <ol>
+      <li>In the OurShell app, open <b>Account &amp; sync</b>, enter <b id="server-url"></b> as the server, and <b>sign up</b>. That first account becomes the owner.</li>
+      <li>Open the <a href="/admin">admin page</a> to create invite codes for other people.</li>
+    </ol>
+  </section>
+
+  <footer>OurShell · <a href="https://github.com/NakharinA/OurShell/blob/main/docs/self-hosting.md">Self-hosting guide</a></footer>
+</main>
+</body>
+</html>

@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
@@ -30,21 +30,38 @@ pub async fn rate_limit_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Response {
+    if let Some(blocked) = check(state.rate_limiter(), &request) {
+        return blocked;
+    }
+    next.run(request).await
+}
+
+/// The same per-IP limit for routers that don't carry an [`AppState`]
+/// (the setup wizard and the admin page), with their own limiter.
+pub async fn limit_with(
+    State(limiter): State<Arc<RateLimiter>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if let Some(blocked) = check(&limiter, &request) {
+        return blocked;
+    }
+    next.run(request).await
+}
+
+fn check(limiter: &RateLimiter, request: &Request<Body>) -> Option<Response> {
     let ip = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0.ip());
-    if let Some(ip) = ip {
-        if !state.rate_limiter().allow(ip) {
-            return AppError::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "rate_limited",
-                "too many requests, try again later",
-            )
-            .into_response();
-        }
-    }
-    next.run(request).await
+        .map(|ci| ci.0.ip())?;
+    (!limiter.allow(ip)).then(|| {
+        AppError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many requests, try again later",
+        )
+        .into_response()
+    })
 }
 
 struct Bucket {

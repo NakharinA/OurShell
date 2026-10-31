@@ -111,6 +111,9 @@ pub async fn start() -> Option<TestServer> {
         rate_limit_per_min: 0, // unlimited: these tests push/pull many requests
         session_ttl_hours: 24,
         oidc: None,
+        public_url: None,
+        tls: None,
+        admin_password_hash: None,
     };
 
     let state = AppState::new(pool.clone(), config)
