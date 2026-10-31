@@ -50,6 +50,10 @@ full, commented list and `server/src/config.rs` for how each is parsed.
 | `RATE_LIMIT_PER_MIN` | no | `30` | per client IP, auth endpoints only; `0` = unlimited |
 | `SESSION_TTL_HOURS` | no | `720` (30 days) | |
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URL` | no | unset | all four together enable `/v1/oidc/*` |
+| `OURSHELL_TLS_DOMAIN` | no | unset | serve HTTPS with a Let's Encrypt certificate for this domain (see below) |
+| `OURSHELL_TLS_EMAIL` | no | unset | contact email for the Let's Encrypt account |
+| `OURSHELL_TLS_BIND` | no | `0.0.0.0:8444` | where the built-in HTTPS listener binds |
+| `OURSHELL_ACME_STAGING` | no | `false` | `1`/`true`/`yes`/`on` = Let's Encrypt staging (untrusted test certificates) |
 
 ### Generating `SERVER_MASTER_KEY`
 
@@ -65,6 +69,46 @@ the ID token, and reports whether that email already has an account). OIDC
 only **identifies** the user; the master password still unlocks the vault
 over OPAQUE afterward, same as a normal login. If unset, both routes answer
 `501 Not Implemented`.
+
+## HTTPS with Let's Encrypt
+
+The server can get and renew its own certificate from Let's Encrypt. Set a
+domain on the admin page (or `OURSHELL_TLS_DOMAIN`, plus optionally
+`OURSHELL_TLS_EMAIL` for expiry notices) and, once the server is set up, it
+serves the same API and pages over HTTPS on `OURSHELL_TLS_BIND` (default
+`0.0.0.0:8444`) in addition to plain HTTP on `BIND_ADDR`. Plain HTTP keeps
+running so LAN clients, the setup wizard and the container healthcheck
+work unchanged; point clients at `https://<your domain>` for anything that
+crosses the internet. Changing or clearing the domain on the admin page
+takes effect immediately, without a restart.
+
+Requirements:
+
+- **DNS**: an A (and/or AAAA) record for the domain pointing at the host's
+  public address.
+- **Port 443**: Let's Encrypt validates with the TLS-ALPN-01 challenge,
+  which connects to port 443 on that address. The container runs as a
+  non-root user, so it listens on 8444 instead: forward host port 443 to
+  container port 8444 (e.g. `ports: ["443:8444"]` in `docker-compose.yml`,
+  plus a router port forward if the host is behind NAT). Port 80 is not
+  needed.
+- **Persistent data dir**: the ACME account key and certificates are cached
+  in `<data dir>/acme` (`$OURSHELL_DATA_DIR`, `/data` in the Docker image).
+  Keep it on a volume; otherwise every restart orders a new certificate and
+  you will soon hit Let's Encrypt's rate limits.
+- **Testing**: set `OURSHELL_ACME_STAGING=1` while you get DNS and port
+  forwarding right. Staging certificates aren't trusted by browsers or the
+  app, but the rate limits are far more generous. Unset it afterwards (the
+  production certificate is cached separately).
+
+The admin page's status shows `tls_status` ("waiting for certificate",
+"active", or the last error); the server log has the details (`ACME:`
+lines). Renewal happens automatically in the background.
+
+Prefer your own reverse proxy (Caddy, nginx, Traefik, a cloud load
+balancer)? Leave the domain empty and terminate TLS there, forwarding to
+`BIND_ADDR` over plain HTTP and setting `X-Forwarded-Proto: https`, which
+the admin page uses to mark its session cookie `Secure`.
 
 ## Connecting clients
 
@@ -271,6 +315,7 @@ higher effective rate limit than configured, never a security issue).
 
 This server is built without `aws-lc-sys` on purpose -- it needs NASM on
 Windows and is a heavier native build everywhere else. Every TLS consumer
-(`sqlx`'s Postgres driver, and the optional OIDC HTTP client) is configured
+(`sqlx`'s Postgres driver, the optional OIDC HTTP client, and the built-in
+Let's Encrypt HTTPS listener via `rustls-acme`) is configured
 to use the pure-Rust `ring` crypto provider instead. `cargo tree -i
 aws-lc-sys` should always report no matches for this workspace.

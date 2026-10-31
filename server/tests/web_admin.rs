@@ -219,6 +219,7 @@ async fn admin_page() {
         sessions: Arc::new(admin::Sessions::default()),
         reload,
         env_locked: Arc::new(vec!["rate_limit_per_min"]),
+        tls_status: Arc::new(Default::default()),
     });
 
     // Signed out, and the CSRF header is required.
@@ -237,10 +238,27 @@ async fn admin_page() {
     )
     .await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
+    // Over the built-in HTTPS listener the cookie is `Secure`...
+    let via_tls = web
+        .clone()
+        .layer(axum::Extension(ourshell_server::tls::ViaTls));
+    let (s, _, tls_cookie) = call(
+        &via_tls,
+        "POST",
+        "/admin/api/login",
+        None,
+        true,
+        login.clone(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(tls_cookie.unwrap().contains("; Secure"));
+    // ...but not over plain HTTP.
     let (s, _, set_cookie) = call(&web, "POST", "/admin/api/login", None, true, login).await;
     assert_eq!(s, StatusCode::OK);
     let set_cookie = set_cookie.unwrap();
     assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("SameSite=Strict"));
+    assert!(!set_cookie.contains("Secure"));
     let cookie = set_cookie.split(';').next().unwrap().to_string();
     let c = Some(cookie.as_str());
 
@@ -250,6 +268,7 @@ async fn admin_page() {
         (status["users"].as_i64(), status["has_owner"].as_bool()),
         (Some(0), Some(false))
     );
+    assert!(status["tls_status"].is_null());
 
     // Invites need an org, which the first sign-up creates.
     let (s, body, _) = call(

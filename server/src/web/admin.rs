@@ -15,7 +15,7 @@ use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::middleware;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post, put};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use ourshell_proto::sync::OrgRole;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -30,6 +30,7 @@ use crate::routes::admin as org_admin;
 use crate::settings::{self, FileOidc, FileTls};
 use crate::sqlx;
 use crate::state::AppState;
+use crate::tls::{TlsStatus, ViaTls};
 
 const COOKIE: &str = "ourshell_admin";
 const SESSION_TTL: Duration = Duration::from_secs(12 * 3600);
@@ -76,6 +77,8 @@ pub struct AdminCtx {
     pub reload: Reload,
     /// Settings keys pinned by environment variables (read-only here).
     pub env_locked: Arc<Vec<&'static str>>,
+    /// State of the built-in HTTPS listener, for the status card.
+    pub tls_status: Arc<TlsStatus>,
 }
 
 pub fn router(ctx: AdminCtx) -> Router {
@@ -144,10 +147,13 @@ fn session_cookie(value: &str, max_age: u64, secure: bool) -> String {
     )
 }
 
-/// Whether the browser reached us over HTTPS (directly, or via a proxy
-/// that says so); `Secure` cookies would be dropped on plain HTTP.
-fn is_https(headers: &HeaderMap, ctx: &AdminCtx) -> bool {
-    ctx.state.config().tls.is_some()
+/// Whether the browser reached us over HTTPS: on the built-in HTTPS
+/// listener (which tags requests with [`ViaTls`]), or via a proxy that says
+/// so. `Secure` cookies would be dropped on plain HTTP, which keeps serving
+/// the LAN even when HTTPS is on, so a configured TLS domain alone isn't
+/// enough.
+fn is_https(headers: &HeaderMap, via_tls: Option<Extension<ViaTls>>) -> bool {
+    via_tls.is_some()
         || headers
             .get("x-forwarded-proto")
             .and_then(|v| v.to_str().ok())
@@ -161,6 +167,7 @@ struct LoginRequest {
 
 async fn login(
     State(ctx): State<AdminCtx>,
+    via_tls: Option<Extension<ViaTls>>,
     headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> AppResult<Response> {
@@ -185,15 +192,20 @@ async fn login(
         return Err(AppError::unauthorized("wrong password"));
     }
     let token = ctx.sessions.create();
-    let cookie = session_cookie(&token, SESSION_TTL.as_secs(), is_https(&headers, &ctx));
+    let cookie = session_cookie(&token, SESSION_TTL.as_secs(), is_https(&headers, via_tls));
     Ok(([(header::SET_COOKIE, cookie)], Json(json!({ "ok": true }))).into_response())
 }
 
-async fn logout(State(ctx): State<AdminCtx>, _: Admin, headers: HeaderMap) -> Response {
+async fn logout(
+    State(ctx): State<AdminCtx>,
+    _: Admin,
+    via_tls: Option<Extension<ViaTls>>,
+    headers: HeaderMap,
+) -> Response {
     if let Some(t) = cookie_token(&headers) {
         ctx.sessions.remove(&t);
     }
-    let cookie = session_cookie("", 0, is_https(&headers, &ctx));
+    let cookie = session_cookie("", 0, is_https(&headers, via_tls));
     ([(header::SET_COOKIE, cookie)], Json(json!({ "ok": true }))).into_response()
 }
 
@@ -214,6 +226,7 @@ async fn status(State(ctx): State<AdminCtx>, _: Admin) -> AppResult<Json<serde_j
         "database": super::redact_database_url(&cfg.database_url),
         "database_version": db_version,
         "tls_domain": cfg.tls.as_ref().map(|t| t.domain.clone()),
+        "tls_status": ctx.tls_status.get(),
         "users": count(pool, "SELECT COUNT(*) FROM users").await?,
         "devices": count(pool, "SELECT COUNT(*) FROM devices WHERE NOT revoked").await?,
         "items": count(pool, "SELECT COUNT(*) FROM items WHERE NOT deleted").await?,
