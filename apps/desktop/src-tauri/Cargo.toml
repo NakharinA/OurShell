@@ -5,7 +5,7 @@ members = ["."]
 [package]
 name = "ourshell-desktop"
 description = "OurShell desktop app (Tauri 2 shell over the local agent)"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/NakharinA/OurShell"
