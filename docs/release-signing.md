@@ -42,6 +42,8 @@ Add `WINDOWS_CERTIFICATE` (base64 of the `.pfx`) and `WINDOWS_CERTIFICATE_PASSWO
 
 Add `APPLE_CERTIFICATE` (base64 `.p12` of a Developer ID Application certificate), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and `APPLE_TEAM_ID`.
 
+Without these secrets the app is **ad-hoc signed** (`bundle.macOS.signingIdentity: "-"` in `tauri.conf.json`; the `APPLE_SIGNING_IDENTITY` secret overrides it). An unsigned app downloaded on Apple Silicon is reported as "damaged and can't be opened"; an ad-hoc signed one gets the milder "Apple could not verify" prompt, which users can bypass with System Settings → Privacy & Security → **Open Anyway** (see the README's "Installing on macOS"). Only Developer ID signing plus notarization removes the prompt entirely.
+
 ## Cutting a release
 
 1. `node scripts/bump-version.mjs X.Y.Z` -- rewrites the version everywhere it's recorded (workspace `Cargo.toml`, `apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`, `apps/desktop/package.json`). Run `node scripts/check-version.mjs` if you want to double-check they agree (CI does this on every push/PR too).
