@@ -63,6 +63,15 @@ pub fn acme_staging(env: &dyn Fn(&str) -> Option<String>) -> bool {
     })
 }
 
+/// The ACME directory to order certificates from.
+pub fn directory_url(staging: bool) -> &'static str {
+    if staging {
+        rustls_acme::acme::LETS_ENCRYPT_STAGING_DIRECTORY
+    } else {
+        rustls_acme::acme::LETS_ENCRYPT_PRODUCTION_DIRECTORY
+    }
+}
+
 /// The TLS settings a serve generation should use: only once the server is
 /// set up (`config` is `Some`) and a non-empty domain is configured.
 pub fn wanted(config: Option<&Config>) -> Option<TlsConfig> {
@@ -148,7 +157,7 @@ pub async fn start(
     socket: &mut TlsSocket,
     tls: Option<&TlsConfig>,
     data_dir: &Path,
-    staging: bool,
+    directory: &str,
     status: &Arc<TlsStatus>,
 ) -> Generation {
     let Some(tls) = tls else {
@@ -181,7 +190,7 @@ pub async fn start(
     tracing::info!(
         domain = %tls.domain,
         addr = %local_addr,
-        staging,
+        directory,
         "serving HTTPS with a Let's Encrypt certificate (TLS-ALPN-01)"
     );
     status.set(Some("waiting for certificate".into()));
@@ -189,7 +198,7 @@ pub async fn start(
     let mut state = AcmeConfig::new([tls.domain.clone()])
         .contact(tls.email.iter().map(|e| format!("mailto:{e}")))
         .cache(DirCache::new(data_dir.join(ACME_CACHE_DIR)))
-        .directory_lets_encrypt(!staging)
+        .directory(directory)
         .state();
     let challenge = state.challenge_rustls_config();
     let mut default = (*state.default_rustls_config()).clone();
@@ -420,7 +429,14 @@ mod tests {
     async fn no_tls_binds_nothing() {
         let mut socket = TlsSocket::new("127.0.0.1:0".parse().unwrap());
         let status = Arc::new(TlsStatus::default());
-        let generation = start(&mut socket, None, Path::new("."), true, &status).await;
+        let generation = start(
+            &mut socket,
+            None,
+            Path::new("."),
+            "https://127.0.0.1:1/directory",
+            &status,
+        )
+        .await;
         assert!(generation.listener.is_none());
         assert!(socket.listener.is_none());
         assert_eq!(status.get(), None);
@@ -435,18 +451,20 @@ mod tests {
             email: None,
         };
         // Never written to: the ACME task is dropped long before an
-        // account could be created.
+        // account could be created, and its directory is a closed local
+        // port, so the test never touches the network.
         let dir = std::env::temp_dir().join(format!("ourshell-tls-{}", uuid::Uuid::new_v4()));
-        let first = start(&mut socket, Some(&tls), &dir, true, &status).await;
+        let acme = "https://127.0.0.1:1/directory";
+        let first = start(&mut socket, Some(&tls), &dir, acme, &status).await;
         let addr = first.listener.as_ref().unwrap().local_addr;
         assert_ne!(addr.port(), 0);
         assert!(status.get().unwrap().starts_with("waiting for certificate"));
         drop(first);
         // A later generation reuses the same socket rather than rebinding.
-        let second = start(&mut socket, Some(&tls), &dir, true, &status).await;
+        let second = start(&mut socket, Some(&tls), &dir, acme, &status).await;
         assert_eq!(second.listener.as_ref().unwrap().local_addr, addr);
         drop(second);
-        let off = start(&mut socket, None, &dir, true, &status).await;
+        let off = start(&mut socket, None, &dir, acme, &status).await;
         assert!(off.listener.is_none());
         assert_eq!(status.get(), None);
     }

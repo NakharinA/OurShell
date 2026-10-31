@@ -41,7 +41,9 @@ async function loadOverview() {
   $("#o-noowner").hidden = s.has_owner;
   $("#o-version").textContent = s.version;
   $("#o-db").textContent = `${s.database} (PostgreSQL ${s.database_version})`;
-  $("#o-tls").textContent = s.tls_domain ? `Let's Encrypt for ${s.tls_domain}` : "Off (plain HTTP)";
+  $("#o-tls").textContent = s.tls_domain
+    ? `Let's Encrypt for ${s.tls_domain}${s.tls_status ? ` (${s.tls_status})` : ""}`
+    : "Off (plain HTTP)";
 }
 
 async function loadUsers() {

@@ -93,7 +93,7 @@ pub async fn run() -> Result<()> {
     // time a generation needs it and then shared like `listener`.
     let env = |k: &str| std::env::var(k).ok();
     let mut tls_socket = tls::TlsSocket::new(tls::bind_addr(&env)?);
-    let acme_staging = tls::acme_staging(&env);
+    let acme_directory = tls::directory_url(tls::acme_staging(&env));
     let tls_status = std::sync::Arc::new(tls::TlsStatus::default());
 
     let reload = web::Reload::default();
@@ -137,7 +137,7 @@ pub async fn run() -> Result<()> {
             &mut tls_socket,
             wanted_tls.as_ref(),
             &data_dir,
-            acme_staging,
+            acme_directory,
             &tls_status,
         )
         .await;
