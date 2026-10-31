@@ -50,6 +50,22 @@ async fn full_sync_flow_two_devices_conflict_and_tombstone() {
         )
         .unwrap();
 
+    // --- The account password must be the vault's master password (other
+    // devices unlock the synced vault with it): anything else is refused
+    // before an account is created.
+    let err = sync::signup(
+        &server.base_url,
+        "alice@example.com",
+        "a different password",
+        &mut vault_a,
+        "device-a",
+        None,
+    )
+    .await
+    .expect_err("signup with a password other than the master password");
+    assert!(err.to_string().contains("master password"), "{err}");
+    assert!(vault_a.header().local_only, "nothing was signed up");
+
     // --- Signs up: uploads the vault's existing key material and the two hosts.
     let mut session_a = sync::signup(
         &server.base_url,

@@ -48,7 +48,7 @@ use ourshell_proto::sync::{
 };
 
 use crate::crypto::keys::{AccountPublicKeys, ItemEnvelope};
-use crate::vault::{Header, Vault, VaultInfo};
+use crate::vault::{Header, Vault, VaultError, VaultInfo};
 
 /// Result of one [`sync`] call.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +132,15 @@ pub async fn signup(
     device_name: &str,
     invite_code: Option<&str>,
 ) -> Result<SyncSession> {
+    // Signing in on another device unlocks the downloaded vault with the
+    // account password, so it has to be this vault's master password.
+    vault.check_password(password).map_err(|e| match e {
+        VaultError::WrongPassword => SyncError::Protocol(
+            "the account password must be this vault's master password (other devices unlock the synced vault with it)"
+                .into(),
+        ),
+        other => other.into(),
+    })?;
     let client = SyncClient::new(server_url);
     let header = vault.header().clone();
     let account = account_upload(&header)?;

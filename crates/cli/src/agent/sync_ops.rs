@@ -100,10 +100,13 @@ fn sync_err(e: SyncError) -> RpcError {
             status,
             code,
             message,
-        } => err(
-            rpc::INVALID_PARAMS,
-            format!("sync server rejected the request ({status} {code}): {message}"),
-        ),
+        } => RpcError {
+            code: rpc::INVALID_PARAMS,
+            message: format!("sync server rejected the request ({status} {code}): {message}"),
+            // The server's error code (e.g. `totp_required`), so clients can
+            // react to it without parsing the message.
+            data: Some(json!({ "server_status": status, "server_error": code })),
+        },
         SyncError::Http(e) => err(
             rpc::INTERNAL_ERROR,
             format!("could not reach the sync server: {e}"),

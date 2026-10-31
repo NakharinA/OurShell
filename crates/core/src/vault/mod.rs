@@ -341,6 +341,15 @@ impl Vault {
         self.unlocked.is_some()
     }
 
+    /// Whether `password` is this vault's master password, without changing
+    /// its locked/unlocked state.
+    pub fn check_password(&self, password: &str) -> Result<()> {
+        let master = derive_master_key(password.as_bytes(), &self.header.kdf)?;
+        AccountKeys::unwrap(&master, &self.header.wrapped_account_keys)
+            .map(|_| ())
+            .map_err(|_| VaultError::WrongPassword)
+    }
+
     pub fn unlock(&mut self, password: &str) -> Result<()> {
         let master = derive_master_key(password.as_bytes(), &self.header.kdf)?;
         let account = AccountKeys::unwrap(&master, &self.header.wrapped_account_keys)
