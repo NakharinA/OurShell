@@ -2481,7 +2481,7 @@ dependencies = [
 
 [[package]]
 name = "ourshell"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2519,7 +2519,7 @@ dependencies = [
 
 [[package]]
 name = "ourshell-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "argon2 0.6.0",
  "axum",
@@ -2555,7 +2555,7 @@ dependencies = [
 
 [[package]]
 name = "ourshell-mcp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2573,7 +2573,7 @@ dependencies = [
 
 [[package]]
 name = "ourshell-proto"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "argon2 0.5.3",
  "base64 0.23.1",
@@ -2587,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "ourshell-server"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "axum",
