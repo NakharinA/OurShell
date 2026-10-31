@@ -9,6 +9,28 @@ A self-hostable, open-source, Termius-style SSH client written in Rust. It inclu
 
 Secrets are always encrypted on the client before they reach the server. See [the project plan](Open-Source%20SSH%20Client%20—%20Project%20Plan.md) and [`docs/`](docs/).
 
+## Features
+
+- **SSH and Telnet hosts**: interactive terminals with tabs and split panes, saved credentials and keys, jump hosts, agent forwarding. Telnet is for switches, routers and older devices (terminal only, unencrypted).
+- **Host groups**: nested groups with rename, subgroups and move-to; created in the app or with `ourshell group`.
+- **SFTP, port forwarding and snippets**: browse and transfer files, local/remote forwards, run saved commands on one or many hosts.
+- **Encrypted vault**: everything lives in a local vault encrypted with your master password (Argon2id + XChaCha20-Poly1305), with a recovery phrase.
+- **Sync across computers**: an optional self-hosted server that only ever stores ciphertext. Team vaults let you share hosts with other people.
+- **AI with approval**: an MCP server lets AI assistants list and use hosts you opt in, with every action approved by you in the app or CLI.
+- **Imports**: `~/.ssh/config` and Termius CSV.
+
+## Download
+
+Get the desktop app, or the `ourshell` CLI and `ourshell-mcp` server, from [GitHub Releases](https://github.com/NakharinA/OurShell/releases/latest):
+
+| Platform | Desktop app | CLI + MCP |
+|---|---|---|
+| Windows (x64, ARM64) | `OurShell_<version>_x64-setup.exe` / `_arm64-setup.exe` | `ourshell-v<version>-<arch>-pc-windows-msvc.zip` |
+| macOS (Apple Silicon) | `OurShell_<version>_aarch64.dmg` (see [Installing on macOS](#installing-on-macos)) | `ourshell-v<version>-aarch64-apple-darwin.tar.gz` |
+| Linux (x64, ARM64) | `.AppImage` (updates itself), `.deb`, `.rpm` | `ourshell-v<version>-<arch>-unknown-linux-gnu.tar.gz` |
+
+Or build the CLI from source with `cargo install --path crates/cli`.
+
 ## Layout
 
 ```
@@ -24,11 +46,12 @@ docs            threat model, protocol specs
 ## Quick start (CLI)
 
 ```sh
-cargo install --path crates/cli          # installs `ourshell`
 ourshell vault init                      # create the encrypted vault; save the recovery phrase
 ourshell identity add me -u alice        # prompts for the SSH password (optional)
 ourshell key gen laptop                  # or: ourshell key import laptop ~/.ssh/id_ed25519
 ourshell host add web alice@10.0.0.5 --identity me
+ourshell host add sw1 10.0.0.9 --protocol telnet   # a telnet device
+ourshell group add prod && ourshell host edit web --group prod
 ourshell connect web                     # interactive shell
 ourshell exec web uptime                 # one command
 ourshell sftp put web ./file.txt /tmp/file.txt
@@ -55,7 +78,15 @@ On Windows with Docker Desktop (PowerShell):
 irm https://github.com/NakharinA/OurShell/releases/latest/download/install-server.ps1 | iex
 ```
 
-The installer starts the server (with its own PostgreSQL, or one you already have) and prints a link to a setup wizard in your browser. Re-run it to upgrade. See [`docs/self-hosting.md`](docs/self-hosting.md) for options, backups and running it by hand.
+The installer starts the server (with its own PostgreSQL, or one you already have) and prints a link to finish setup in your browser:
+
+- **Setup wizard** (`/setup`): checks the database, generates the server's master key (save it), sets who can sign up and an admin password.
+- **Admin page** (`/admin`): status, settings, invite codes and users.
+- **HTTPS**: optional built-in Let's Encrypt certificate, or put it behind your own reverse proxy.
+
+Then, in the app, open **Account & sync**, enter the server address and sign up. The first account becomes the owner. Re-run the installer with `--upgrade` to update.
+
+The server is one image for amd64 and arm64, [`ghcr.io/nakharina/ourshell-server`](https://github.com/NakharinA/OurShell/pkgs/container/ourshell-server), if you'd rather run it yourself. See [`docs/self-hosting.md`](docs/self-hosting.md) for options, backups and running it by hand.
 
 ## Installing on macOS
 
