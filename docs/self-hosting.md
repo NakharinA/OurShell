@@ -729,9 +729,13 @@ that's not what you want).
 
 ### Changing the master password
 
-`ourshell vault passwd` changes the master password. If the vault isn't
-already unlocked it asks for the current one first (to unlock locally --
-this never leaves the device); the new password is then set locally
+`ourshell vault passwd` (or **Account & sync → Change master password**
+in the desktop app, with or without a sync account) changes the master
+password. It always asks for the current one first and checks it locally,
+even when the vault is already unlocked, so nobody can change it from an
+unlocked computer without knowing it (it never leaves the device; for
+scripts, pass it in `OURSHELL_PASSWORD` and the new one in
+`OURSHELL_NEW_PASSWORD`). The new password is then set locally
 (`Vault::change_password`, a fresh KDF salt) and, if the vault is signed
 in, pushed to the server: a brand-new OPAQUE registration replaces the
 account's password file, and the account's current KDF params and

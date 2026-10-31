@@ -28,6 +28,9 @@
   let totpCode = "";
   let changeOld = "";
   let changeNew = "";
+  let changeNew2 = "";
+  /** Change-password errors, separate from sign-in errors. */
+  let pwError = "";
 
   $: if ($accountModalOpen && $accountStatus.signed_in) void loadDevices();
 
@@ -42,6 +45,8 @@
   function close(): void {
     accountModalOpen.set(false);
     error = "";
+    pwError = "";
+    changeOld = changeNew = changeNew2 = "";
     totpSetup = null;
     password = "";
     password2 = "";
@@ -172,15 +177,21 @@
   }
 
   async function changePassword(): Promise<void> {
+    if (changeNew !== changeNew2) {
+      pwError = $t("acct.passwordMismatch");
+      return;
+    }
     busy = true;
-    error = "";
+    pwError = "";
     try {
-      await rpc.accountChangePassword({ old_password: changeOld || null, new_password: changeNew });
+      // The agent always verifies the current master password.
+      await rpc.accountChangePassword({ old_password: changeOld, new_password: changeNew });
       changeOld = "";
       changeNew = "";
+      changeNew2 = "";
       toast.success($t("a.saved"));
     } catch (err) {
-      error = errorText(err, $t("toast.error"));
+      pwError = errorText(err, $t("toast.error"));
     } finally {
       busy = false;
     }
@@ -276,24 +287,31 @@
         {/if}
       </div>
       <div class="psec">
-        <h3><Icon name="pass" /><span>{$t("acct.changePassword")}</span></h3>
-        <div class="field">
-          <label for="chg-old">{$t("acct.oldPassword")}</label>
-          <div class="input"><input id="chg-old" type="password" bind:value={changeOld} /></div>
-        </div>
-        <div class="field">
-          <label for="chg-new">{$t("acct.newPassword")}</label>
-          <div class="input"><input id="chg-new" type="password" bind:value={changeNew} /></div>
-        </div>
-        {#if error}<p class="error-text">{error}</p>{/if}
-        <button class="btn btn-primary" style="align-self:flex-start" disabled={busy || !changeNew} on:click={changePassword}>
-          {$t("acct.changePassword")}
-        </button>
-      </div>
-      <div class="psec">
         <button class="btn btn-danger" style="align-self:flex-start" disabled={busy} on:click={logout}>{$t("acct.logout")}</button>
       </div>
     {/if}
+    <!-- Available with or without a sync account: it's the vault's master
+         password (and, when signed in, the account's password too). -->
+    <div class="psec">
+      <h3><Icon name="pass" /><span>{$t("acct.changePassword")}</span></h3>
+      <p class="hint">{$accountStatus.signed_in ? $t("acct.changePasswordSynced") : $t("acct.changePasswordLocal")}</p>
+      <div class="field">
+        <label for="chg-old">{$t("acct.oldPassword")}</label>
+        <div class="input"><input id="chg-old" type="password" bind:value={changeOld} autocomplete="current-password" /></div>
+      </div>
+      <div class="field">
+        <label for="chg-new">{$t("acct.newPassword")}</label>
+        <div class="input"><input id="chg-new" type="password" bind:value={changeNew} autocomplete="new-password" /></div>
+      </div>
+      <div class="field">
+        <label for="chg-new2">{$t("acct.confirmPassword")}</label>
+        <div class="input"><input id="chg-new2" type="password" bind:value={changeNew2} autocomplete="new-password" /></div>
+      </div>
+      {#if pwError}<p class="error-text">{pwError}</p>{/if}
+      <button class="btn btn-primary" style="align-self:flex-start" disabled={busy || !changeOld || !changeNew || !changeNew2} on:click={changePassword}>
+        {$t("acct.changePassword")}
+      </button>
+    </div>
     <svelte:fragment slot="footer">
       <button class="btn btn-ghost" on:click={close}>{$t("p.close")}</button>
     </svelte:fragment>
