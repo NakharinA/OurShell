@@ -9,6 +9,7 @@ use ourshell_core::ssh::{
     self, Auth, ChainVerifier, ConnectOptions, ExecLimits, ForwardHandle, HostKeyVerifier,
     KnownHostsFile, MemoryKnownHosts, PtyEvent, Session, SshError, Target,
 };
+use ourshell_core::telnet;
 use ourshell_core::vault::{Host, Identity, KnownHost, SshKey};
 use ourshell_proto::agent::{
     event, method, DirEntry, ExecParams, ExecResult, FileData, ForwardInfo, ForwardKind,
@@ -25,9 +26,60 @@ const MAX_JUMPS: usize = 8;
 pub const DEFAULT_MAX_OUTPUT: usize = 1 << 20;
 
 struct PtyEntry {
-    writer: ssh::pty::PtyWriter,
+    writer: PtyWriter,
     owner: usize,
-    _session: Session,
+    /// Keeps the SSH connection alive (telnet sessions own their socket).
+    _session: Option<Session>,
+}
+
+/// The read side of an interactive session over either protocol. Its reader
+/// task stops when this is dropped.
+enum LivePty {
+    Ssh(ssh::PtySession),
+    Telnet(telnet::TelnetSession),
+}
+
+impl LivePty {
+    async fn recv(&mut self) -> Option<PtyEvent> {
+        match self {
+            Self::Ssh(p) => p.events.recv().await,
+            Self::Telnet(t) => t.events.recv().await,
+        }
+    }
+}
+
+/// The write side of an interactive session over either protocol.
+#[derive(Clone)]
+enum PtyWriter {
+    Ssh(ssh::pty::PtyWriter),
+    Telnet(telnet::TelnetWriter),
+}
+
+impl PtyWriter {
+    async fn write(&self, data: &[u8]) -> Result<(), RpcError> {
+        match self {
+            Self::Ssh(w) => w.write(data).await.map_err(ssh_err),
+            Self::Telnet(w) => w.write(data).await.map_err(telnet_err),
+        }
+    }
+
+    async fn resize(&self, cols: u32, rows: u32) -> Result<(), RpcError> {
+        match self {
+            Self::Ssh(w) => w.resize(cols, rows).await.map_err(ssh_err),
+            Self::Telnet(w) => w.resize(cols, rows).await.map_err(telnet_err),
+        }
+    }
+
+    async fn close(&self) {
+        match self {
+            Self::Ssh(w) => {
+                let _ = w.close().await;
+            }
+            Self::Telnet(w) => {
+                let _ = w.close().await;
+            }
+        }
+    }
 }
 
 struct ForwardEntry {
@@ -82,6 +134,17 @@ fn ssh_err(e: SshError) -> RpcError {
         },
         other => err(rpc::INTERNAL_ERROR, other.to_string()),
     }
+}
+
+fn telnet_err(e: telnet::TelnetError) -> RpcError {
+    err(rpc::INTERNAL_ERROR, e.to_string())
+}
+
+fn telnet_unsupported(name: &str) -> RpcError {
+    err(
+        rpc::INVALID_PARAMS,
+        format!("`{name}` is a telnet host: only interactive terminal sessions are supported"),
+    )
 }
 
 /// Builds the hop list (jump hosts first) for a vault host.
@@ -190,7 +253,10 @@ pub async fn connect_host(
     for_ai: bool,
     agent_forwarding: bool,
 ) -> Result<(String, Session), RpcError> {
-    let (id, _host, hops) = targets(state, &target.host, for_ai).await?;
+    let (id, host, hops) = targets(state, &target.host, for_ai).await?;
+    if host.is_telnet() {
+        return Err(telnet_unsupported(&host.name));
+    }
     let known: Vec<(String, String)> = state
         .with_vault(|v| v.list::<KnownHost>())
         .await?
@@ -426,20 +492,20 @@ pub async fn dispatch(state: &Arc<State>, conn: &Arc<Conn>, m: &str, params: Val
         method::PTY_WRITE => {
             let p: PtyWriteParams = parse(params)?;
             let w = pty_writer(state, &p.session_id).await?;
-            w.write(&p.data).await.map_err(ssh_err)?;
+            w.write(&p.data).await?;
             state.touch().await;
             Ok(json!({}))
         }
         method::PTY_RESIZE => {
             let p: PtyResizeParams = parse(params)?;
             let w = pty_writer(state, &p.session_id).await?;
-            w.resize(p.cols, p.rows).await.map_err(ssh_err)?;
+            w.resize(p.cols, p.rows).await?;
             Ok(json!({}))
         }
         method::PTY_CLOSE => {
             let p: SessionRef = parse(params)?;
             if let Some(e) = state.ssh.ptys.lock().await.remove(&p.session_id) {
-                let _ = e.writer.close().await;
+                e.writer.close().await;
             }
             Ok(json!({}))
         }
@@ -509,7 +575,7 @@ pub async fn dispatch(state: &Arc<State>, conn: &Arc<Conn>, m: &str, params: Val
     }
 }
 
-async fn pty_writer(state: &Arc<State>, id: &str) -> Result<ssh::pty::PtyWriter, RpcError> {
+async fn pty_writer(state: &Arc<State>, id: &str) -> Result<PtyWriter, RpcError> {
     state
         .ssh
         .ptys
@@ -521,16 +587,35 @@ async fn pty_writer(state: &Arc<State>, id: &str) -> Result<ssh::pty::PtyWriter,
 }
 
 async fn pty_open(state: &Arc<State>, conn: &Arc<Conn>, p: PtyOpenParams) -> RpcResult {
-    let (_, session) = connect_host(state, &p.target, false, p.agent_forwarding).await?;
-    let mut pty = session
-        .open_pty(&p.term, p.cols.max(1), p.rows.max(1))
+    let (_, host) = state.with_vault(|v| v.find::<Host>(&p.target.host)).await?;
+    let (writer, mut events, session) = if host.is_telnet() {
+        let t = telnet::connect(
+            &host.hostname,
+            host.port_or_default(),
+            &p.term,
+            p.cols.max(1),
+            p.rows.max(1),
+        )
         .await
-        .map_err(ssh_err)?;
+        .map_err(telnet_err)?;
+        (PtyWriter::Telnet(t.writer()), LivePty::Telnet(t), None)
+    } else {
+        let (_, session) = connect_host(state, &p.target, false, p.agent_forwarding).await?;
+        let pty = session
+            .open_pty(&p.term, p.cols.max(1), p.rows.max(1))
+            .await
+            .map_err(ssh_err)?;
+        (
+            PtyWriter::Ssh(pty.writer()),
+            LivePty::Ssh(pty),
+            Some(session),
+        )
+    };
     let session_id = uuid::Uuid::new_v4().to_string();
     state.ssh.ptys.lock().await.insert(
         session_id.clone(),
         PtyEntry {
-            writer: pty.writer(),
+            writer,
             owner: conn_key(conn),
             _session: session,
         },
@@ -540,7 +625,7 @@ async fn pty_open(state: &Arc<State>, conn: &Arc<Conn>, p: PtyOpenParams) -> Rpc
     let sid = session_id.clone();
     tokio::spawn(async move {
         let mut exit = None;
-        while let Some(ev) = pty.events.recv().await {
+        while let Some(ev) = events.recv().await {
             match ev {
                 PtyEvent::Data(d) | PtyEvent::ExtendedData(d) => {
                     let n = Notification::new(
@@ -626,7 +711,7 @@ pub async fn connection_closed(state: &Arc<State>, conn: &Arc<Conn>) {
         .collect();
     for id in ids {
         if let Some(e) = ptys.remove(&id) {
-            let _ = e.writer.close().await;
+            e.writer.close().await;
         }
     }
 }

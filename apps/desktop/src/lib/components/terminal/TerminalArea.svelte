@@ -10,11 +10,13 @@
   import { openSftpTab } from "../../stores/sftp";
   import { focusSftpTab, focusVaultsTab } from "../../stores/windowTabs";
   import { hosts } from "../../stores/items";
+  import { isTelnet } from "../../types";
 
   export let tabId: string;
 
   $: tab = $tabs.find((t2) => t2.id === tabId);
   $: activeLeaf = tab ? findLeaf(tab.root, tab.activePaneId) : null;
+  $: activeRecord = activeLeaf ? $hosts.find((h) => h.id === activeLeaf?.hostId) : undefined;
 
   function split(orientation: "row" | "col"): void {
     if (!tab || !activeLeaf) return;
@@ -45,7 +47,9 @@
 {#if tab}
   <div class="term-area">
     <div class="term-overlay">
-      <button class="icon-btn sm" title={$t("term.sftp")} on:click={sftp}><Icon name="folder" size="sm" /></button>
+      {#if !activeRecord || !isTelnet(activeRecord.item)}
+        <button class="icon-btn sm" title={$t("term.sftp")} on:click={sftp}><Icon name="folder" size="sm" /></button>
+      {/if}
       <button class="icon-btn sm" title={$t("term.splitH")} on:click={() => split("row")}><Icon name="split-h" size="sm" /></button>
       <button class="icon-btn sm" title={$t("term.splitV")} on:click={() => split("col")}><Icon name="split-v" size="sm" /></button>
       <button class="icon-btn sm" title={$t("term.runSnippet")} on:click={runSnippet}><Icon name="code" size="sm" /></button>

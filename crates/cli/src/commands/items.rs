@@ -51,6 +51,10 @@ pub struct HostArgs {
 
 #[derive(Args, Default)]
 pub struct HostEditArgs {
+    /// `ssh` (default) or `telnet`. Telnet hosts support `connect` only.
+    #[arg(long, value_parser = ["ssh", "telnet"])]
+    pub protocol: Option<String>,
+    /// Defaults to 22 for SSH, 23 for telnet.
     #[arg(short, long)]
     pub port: Option<u16>,
     #[arg(short, long)]
@@ -105,6 +109,21 @@ pub enum IdentityCmd {
     Rm {
         identity: String,
     },
+}
+
+#[derive(Subcommand)]
+pub enum GroupCmd {
+    /// Add a group.
+    Add {
+        name: String,
+        /// Parent group name or id (makes this a subgroup).
+        #[arg(long)]
+        parent: Option<String>,
+    },
+    #[command(alias = "list")]
+    Ls,
+    /// Remove a group. Its hosts and subgroups move up one level.
+    Rm { group: String },
 }
 
 #[derive(Subcommand)]
@@ -167,6 +186,9 @@ async fn apply_edits(
     let mut set = |k: &str, v: Value| {
         obj.insert(k.into(), v);
     };
+    if let Some(p) = &a.protocol {
+        set("protocol", json!(p));
+    }
     if let Some(p) = a.port {
         set("port", json!(p));
     }
@@ -287,7 +309,12 @@ pub async fn host(cmd: HostCmd, json_out: bool) -> Result<()> {
             let mut obj = Map::new();
             obj.insert("name".into(), json!(a.name));
             obj.insert("hostname".into(), json!(hostname));
-            obj.insert("port".into(), json!(port.unwrap_or(22)));
+            let default_port = if a.opts.protocol.as_deref() == Some("telnet") {
+                23
+            } else {
+                22
+            };
+            obj.insert("port".into(), json!(port.unwrap_or(default_port)));
             if let Some(u) = user {
                 obj.insert("username".into(), json!(u));
             }
@@ -311,8 +338,8 @@ pub async fn host(cmd: HostCmd, json_out: bool) -> Result<()> {
             }
             let names = vault_names(&c).await.unwrap_or_default();
             println!(
-                "{:<20} {:<32} {:<6} {:<12} {:<6} {:<12}",
-                "NAME", "ADDRESS", "PORT", "USER", "AI", "VAULT"
+                "{:<20} {:<32} {:<6} {:<6} {:<12} {:<6} {:<12}",
+                "NAME", "ADDRESS", "PROTO", "PORT", "USER", "AI", "VAULT"
             );
             for h in hosts {
                 let i = &h.item;
@@ -323,9 +350,10 @@ pub async fn host(cmd: HostCmd, json_out: bool) -> Result<()> {
                     .map(String::as_str)
                     .unwrap_or("Personal");
                 println!(
-                    "{:<20} {:<32} {:<6} {:<12} {:<6} {:<12}",
+                    "{:<20} {:<32} {:<6} {:<6} {:<12} {:<6} {:<12}",
                     s(i, "name"),
                     s(i, "hostname"),
+                    i["protocol"].as_str().unwrap_or("ssh"),
                     i["port"].as_u64().unwrap_or(22),
                     s(i, "username"),
                     if i["ai_allowed"].as_bool().unwrap_or(false) {
@@ -469,6 +497,77 @@ pub async fn snippet(cmd: SnippetCmd, json_out: bool) -> Result<()> {
             rm(&c, "snippet", &snippet).await?;
             if !json_out {
                 println!("Removed snippet `{snippet}`.");
+            }
+        }
+    }
+    Ok(())
+}
+
+pub async fn group(cmd: GroupCmd, json_out: bool) -> Result<()> {
+    let c = connect_unlocked().await?;
+    match cmd {
+        GroupCmd::Add { name, parent } => {
+            let parent_id = match parent {
+                Some(p) => Some(resolve_id(&c, "group", &p).await?),
+                None => None,
+            };
+            let id = put(
+                &c,
+                "group",
+                None,
+                json!({"name": name, "parent_id": parent_id}),
+            )
+            .await?;
+            if json_out {
+                println!("{}", json!({ "id": id }));
+            } else {
+                println!("Added group `{name}` ({id}).");
+            }
+        }
+        GroupCmd::Ls => {
+            let groups = list(&c, "group").await?;
+            if json_out {
+                println!("{}", serde_json::to_string(&groups)?);
+                return Ok(());
+            }
+            let hosts = list(&c, "host").await?;
+            let name_of = |id: &str| {
+                groups
+                    .iter()
+                    .find(|g| g.id == id)
+                    .map(|g| s(&g.item, "name").to_string())
+            };
+            println!("{:<24} {:<24} {:<6}", "NAME", "PARENT", "HOSTS");
+            for g in &groups {
+                let parent = g.item["parent_id"]
+                    .as_str()
+                    .and_then(name_of)
+                    .unwrap_or_default();
+                let n = hosts
+                    .iter()
+                    .filter(|h| h.item["group_id"].as_str() == Some(g.id.as_str()))
+                    .count();
+                println!("{:<24} {:<24} {:<6}", s(&g.item, "name"), parent, n);
+            }
+        }
+        GroupCmd::Rm { group } => {
+            let g = get(&c, "group", &group).await?;
+            let parent = g.item["parent_id"].clone();
+            for mut h in list(&c, "host").await? {
+                if h.item["group_id"].as_str() == Some(g.id.as_str()) {
+                    h.item["group_id"] = parent.clone();
+                    put(&c, "host", Some(h.id), h.item).await?;
+                }
+            }
+            for mut sub in list(&c, "group").await? {
+                if sub.item["parent_id"].as_str() == Some(g.id.as_str()) {
+                    sub.item["parent_id"] = parent.clone();
+                    put(&c, "group", Some(sub.id), sub.item).await?;
+                }
+            }
+            rm(&c, "group", &g.id).await?;
+            if !json_out {
+                println!("Removed group `{group}`.");
             }
         }
     }

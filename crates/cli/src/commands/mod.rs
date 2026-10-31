@@ -51,6 +51,9 @@ pub enum Command {
     /// Manage snippets.
     #[command(subcommand)]
     Snippet(items::SnippetCmd),
+    /// Manage host groups (assign hosts with `host add/edit --group`).
+    #[command(subcommand)]
+    Group(items::GroupCmd),
     /// Approve AI requests, dangerous mode, kill switch and audit log.
     #[command(subcommand)]
     Ai(ai::AiCmd),
@@ -205,6 +208,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Host(cmd) => items::host(cmd, cli.json).await,
         Command::Identity(cmd) => items::identity(cmd, cli.json).await,
         Command::Snippet(cmd) => items::snippet(cmd, cli.json).await,
+        Command::Group(cmd) => items::group(cmd, cli.json).await,
         Command::Ai(cmd) => ai::run(cmd, cli.json).await,
         Command::Account(cmd) => account::run(cmd, cli.json).await,
         Command::Team(cmd) => team::run(cmd, cli.json).await,

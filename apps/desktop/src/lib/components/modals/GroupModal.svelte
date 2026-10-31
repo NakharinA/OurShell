@@ -8,6 +8,7 @@
   import { groups, refreshGroups } from "../../stores/items";
   import { toast, errorText } from "../../stores/toast";
   import type { Group } from "../../types";
+  import { groupPath, parentCandidates } from "../../groupTree";
 
   $: state = $groupEditor;
   $: record = state?.mode === "edit" ? state.record : null;
@@ -65,11 +66,13 @@
 </script>
 
 {#if state}
-  <Modal title={record ? $t("mn.group") : $t("mn.group")} onClose={close}>
+  <Modal title={record ? $t("grp.edit") : $t("mn.group")} onClose={close}>
     <div class="psec">
       <div class="field">
         <label for="group-name">{$t("mn.groupName")}</label>
-        <div class="input"><input id="group-name" bind:value={name} /></div>
+        <div class="input">
+          <input id="group-name" bind:value={name} on:keydown={(e) => e.key === "Enter" && save()} />
+        </div>
       </div>
       <div class="field">
         <label for="group-parent">{$t("mn.groupParent")}</label>
@@ -92,9 +95,9 @@
     <button class="menu-item" on:click={() => { parentId = null; pickerOpen = false; }}>
       <span>{$t("h.none")}</span>
     </button>
-    {#each $groups.filter((g) => g.id !== record?.id) as g (g.id)}
+    {#each parentCandidates($groups, record?.id ?? null) as g (g.id)}
       <button class="menu-item" on:click={() => { parentId = g.id; pickerOpen = false; }}>
-        <Icon name="group" /><span>{g.item.name}</span>
+        <Icon name="group" /><span>{groupPath($groups, g.id).map((x) => x.item.name).join(" / ")}</span>
       </button>
     {/each}
   </Menu>

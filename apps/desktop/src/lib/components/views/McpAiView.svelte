@@ -12,7 +12,7 @@
   import { aiSessions, pendingApprovals, refreshAiStatus } from "../../stores/ai";
   import { dangerousDialogSession } from "../../stores/ui";
   import { toast, errorText } from "../../stores/toast";
-  import type { AuditEntry, ItemRecord, Host } from "../../types";
+  import { isTelnet, type AuditEntry, type ItemRecord, type Host } from "../../types";
 
   type Tab = "approvals" | "access" | "activity";
   let tab: Tab = "approvals";
@@ -288,7 +288,7 @@
 
 {#if hostPickerOpen}
   <Menu x={px} y={py} onClose={() => (hostPickerOpen = false)}>
-    {#each $hosts.filter((h) => !h.item.ai_allowed) as h (h.id)}
+    {#each $hosts.filter((h) => !h.item.ai_allowed && !isTelnet(h.item)) as h (h.id)}
       <button class="menu-item" on:click={() => { toggleAiAllowed(h, true); hostPickerOpen = false; }}>
         <Icon name="hosts" /><span>{h.item.name}</span>
       </button>

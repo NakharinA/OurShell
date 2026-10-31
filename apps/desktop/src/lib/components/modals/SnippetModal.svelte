@@ -7,7 +7,7 @@
   import Menu from "../ui/Menu.svelte";
   import { t } from "../../i18n";
   import { rpc } from "../../rpc";
-  import type { Snippet } from "../../types";
+  import { isTelnet, type Snippet } from "../../types";
   import { hosts, refreshSnippets } from "../../stores/items";
   import { snippetEditor } from "../../stores/ui";
   import { toast, errorText } from "../../stores/toast";
@@ -161,7 +161,7 @@
 
 {#if targetPickerOpen}
   <Menu x={px} y={py} onClose={() => (targetPickerOpen = false)}>
-    {#each $hosts.filter((h) => !targets.includes(h.item.name)) as h (h.id)}
+    {#each $hosts.filter((h) => !targets.includes(h.item.name) && !isTelnet(h.item)) as h (h.id)}
       <button class="menu-item" on:click={() => addTarget(h.item.name)}>
         <Icon name="hosts" /><span>{h.item.name}</span>
       </button>

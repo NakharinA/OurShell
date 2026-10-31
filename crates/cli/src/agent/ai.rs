@@ -98,7 +98,7 @@ async fn ai_hosts(state: &Arc<State>) -> Result<Vec<AiHost>, RpcError> {
     let hosts = state.with_vault(|v| v.list::<Host>()).await?;
     let mut out: Vec<AiHost> = hosts
         .into_iter()
-        .filter(|(_, h)| h.ai_allowed)
+        .filter(|(_, h)| h.ai_allowed && !h.is_telnet())
         .map(|(_, h)| AiHost {
             name: h.name,
             tags: h.tags,
@@ -112,7 +112,7 @@ async fn ai_hosts(state: &Arc<State>) -> Result<Vec<AiHost>, RpcError> {
 async fn ai_host(state: &Arc<State>, name: &str) -> Result<(String, Host), RpcError> {
     let found = state.with_vault(|v| v.find::<Host>(name)).await;
     match found {
-        Ok((id, h)) if h.ai_allowed => Ok((id, h)),
+        Ok((id, h)) if h.ai_allowed && !h.is_telnet() => Ok((id, h)),
         _ => Err(err(
             rpc::POLICY_DENIED,
             format!("host `{name}` is not available to AI; call list_hosts"),

@@ -8,12 +8,25 @@ pub trait Item: Serialize + DeserializeOwned {
     const KIND: &'static str;
 }
 
+/// How to reach a [`Host`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Protocol {
+    #[default]
+    Ssh,
+    /// Unencrypted telnet: interactive terminal only (no SFTP, exec,
+    /// forwarding, jump hosts or AI access).
+    Telnet,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Host {
     /// Display name / alias, unique within the vault (e.g. `prod-web`).
     pub name: String,
     pub hostname: String,
+    /// `ssh` (the default, and what older vault entries deserialize to) or `telnet`.
+    pub protocol: Protocol,
     pub port: u16,
     pub username: Option<String>,
     /// Id of an [`Identity`] to authenticate with.
@@ -47,11 +60,17 @@ pub struct Host {
 
 impl Host {
     pub fn port_or_default(&self) -> u16 {
-        if self.port == 0 {
-            22
-        } else {
+        if self.port != 0 {
             self.port
+        } else if self.protocol == Protocol::Telnet {
+            crate::telnet::DEFAULT_PORT
+        } else {
+            22
         }
+    }
+
+    pub fn is_telnet(&self) -> bool {
+        self.protocol == Protocol::Telnet
     }
 }
 

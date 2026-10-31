@@ -8,7 +8,7 @@
   import Menu from "../ui/Menu.svelte";
   import { t } from "../../i18n";
   import { rpc } from "../../rpc";
-  import { emptyHost, type Host, type Identity } from "../../types";
+  import { DEFAULT_PORT, emptyHost, isTelnet, type Host, type Identity, type Protocol } from "../../types";
   import { groups, hosts, keys, refreshHosts, refreshKeys } from "../../stores/items";
   import { hostEditor, keyEditor, keyPickerReturn } from "../../stores/ui";
   import { openHostTab } from "../../stores/terminal";
@@ -110,7 +110,15 @@
 
   $: selectedKeyName = keyId ? $keys.find((k) => k.id === keyId)?.item.name ?? "" : "";
   $: groupName = form.group_id ? $groups.find((g) => g.id === form.group_id)?.item.name ?? "" : "";
-  $: jumpHosts = $hosts.filter((h) => h.id !== record?.id);
+  $: jumpHosts = $hosts.filter((h) => h.id !== record?.id && !isTelnet(h.item));
+  $: telnet = form.protocol === "telnet";
+
+  function setProtocol(p: Protocol): void {
+    const prev = form.protocol ?? "ssh";
+    // Follow the protocol's default port unless the user picked a custom one.
+    if (!form.port || form.port === DEFAULT_PORT[prev]) form.port = DEFAULT_PORT[p];
+    form.protocol = p;
+  }
 
   async function persistIdentity(name: string): Promise<string | null> {
     const plan = planIdentityUpdate({
@@ -146,6 +154,16 @@
       form.tags = tagsText
         ? tagsText.split(",").map((t2) => t2.trim()).filter(Boolean)
         : form.tags;
+      // Telnet has no auth protocol (you log in at the server's prompt), so
+      // it never carries SSH credentials, a jump host or AI access.
+      if (telnet) {
+        password = "";
+        keyId = null;
+        form.jump_host = null;
+        form.agent_forwarding = false;
+        form.ai_allowed = false;
+        form.ai_readonly_auto = false;
+      }
       form.identity_id = await persistIdentity(form.name);
       const saved = await rpc.itemPut<Host>({ kind: "host", id: record?.id ?? null, item: form });
       if ($currentVaultId && !record) {
@@ -228,6 +246,16 @@
 
     <div class="psec">
       <h3><Icon name="globe" /><span>{$t("h.address")}</span></h3>
+      <div class="field">
+        <span class="lbl">{$t("h.protocol")}</span>
+        <div class="seg" role="radiogroup" aria-label={$t("h.protocol")}>
+          <button role="radio" aria-checked={!telnet} class:on={!telnet} on:click={() => setProtocol("ssh")}>SSH</button>
+          <button role="radio" aria-checked={telnet} class:on={telnet} on:click={() => setProtocol("telnet")}>Telnet</button>
+        </div>
+      </div>
+      {#if telnet}
+        <p class="hint">{$t("h.telnetWarn")}</p>
+      {/if}
       <div class="row">
         <div class="field grow">
           <label for="h-hostname">{$t("h.hostname")}</label>
@@ -235,7 +263,7 @@
         </div>
         <div class="field port">
           <label for="h-port">{$t("h.port")}</label>
-          <div class="input"><input id="h-port" type="number" bind:value={form.port} placeholder="22" /></div>
+          <div class="input"><input id="h-port" type="number" bind:value={form.port} placeholder={String(DEFAULT_PORT[form.protocol ?? "ssh"])} /></div>
         </div>
       </div>
     </div>
@@ -278,6 +306,7 @@
           {/each}
         </div>
       {/if}
+      {#if !telnet}
       <div class="field">
         <label for="h-jump">{$t("h.jump")}</label>
         <button class="picker" id="h-jump" aria-expanded={jumpPickerOpen} on:click={(e) => openPicker("jump", e)}>
@@ -286,8 +315,10 @@
           <Icon name="chev" class="chev" />
         </button>
       </div>
+      {/if}
     </div>
 
+    {#if !telnet}
     <div class="psec">
       <h3><Icon name="shield" /><span>{$t("h.creds")}</span></h3>
       <div class="field">
@@ -346,6 +377,7 @@
         </div>
       {/if}
     </div>
+    {/if}
 
     <div class="psec">
       <h3><Icon name="monitor" /><span>{$t("h.theme")}</span><span class="spacer"></span><span class="badge accent">{form.terminal_theme ?? terminalThemes[0].name}</span></h3>

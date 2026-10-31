@@ -7,7 +7,8 @@
   import Icon from "../../icons/Icon.svelte";
   import Menu from "../ui/Menu.svelte";
   import { t, format } from "../../i18n";
-  import { groups, hosts, refreshAllItems, refreshHosts } from "../../stores/items";
+  import { groups, hosts, refreshAllItems, refreshGroups, refreshHosts } from "../../stores/items";
+  import { groupPath, hostCount } from "../../groupTree";
   import { teams, vaultNames } from "../../stores/teams";
   import {
     hostEditor,
@@ -24,12 +25,19 @@
   import { rpc } from "../../rpc";
   import { toast, errorText } from "../../stores/toast";
   import { parseQuickConnect } from "../../quickConnect";
-  import type { Group, Host, ItemRecord } from "../../types";
+  import { isTelnet, type Group, type Host, type ItemRecord } from "../../types";
 
   let searchInput: HTMLInputElement;
-  let menu: { kind: "new" | "ctx" | "move"; x: number; y: number; host?: ItemRecord<Host> } | null = null;
+  let menu: {
+    kind: "new" | "ctx" | "move" | "group";
+    x: number;
+    y: number;
+    host?: ItemRecord<Host>;
+    group?: ItemRecord<Group>;
+  } | null = null;
 
   $: currentGroup = $hostsGroupFilter ? $groups.find((g) => g.id === $hostsGroupFilter) ?? null : null;
+  $: currentPath = groupPath($groups, $hostsGroupFilter);
   $: childGroups = $groups.filter((g) => (g.item.parent_id ?? null) === ($hostsGroupFilter ?? null));
   $: visibleHosts = $hosts.filter((h) => {
     if ((h.item.group_id ?? null) !== ($hostsGroupFilter ?? null)) return false;
@@ -126,6 +134,49 @@
       await rpc.itemDelete({ kind: "host", id: h.id });
       await refreshHosts();
       toast.success($t("toast.hostDeleted"));
+    } catch (err) {
+      toast.error(errorText(err, $t("toast.error")));
+    }
+  }
+
+  function openGroupMenu(e: MouseEvent, group: ItemRecord<Group>, atPoint: boolean): void {
+    e.preventDefault();
+    if (atPoint) {
+      menu = { kind: "group", x: e.clientX, y: e.clientY, group };
+    } else {
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      menu = { kind: "group", x: r.right, y: r.bottom + 6, group };
+    }
+  }
+  function editGroup(group: ItemRecord<Group>): void {
+    menu = null;
+    groupEditor.set({ mode: "edit", record: group });
+  }
+  function newSubgroup(group: ItemRecord<Group>): void {
+    menu = null;
+    groupEditor.set({ mode: "new", parentId: group.id });
+  }
+  /** Deleting a group keeps its contents: hosts and subgroups move up one level. */
+  async function removeGroup(group: ItemRecord<Group>): Promise<void> {
+    menu = null;
+    const parent = group.item.parent_id ?? null;
+    const hostsIn = $hosts.filter((h) => h.item.group_id === group.id);
+    const subgroups = $groups.filter((g) => g.item.parent_id === group.id);
+    const ok = await confirmDialog({
+      title: format($t("grp.deleteTitle"), { name: group.item.name }),
+      message: hostsIn.length || subgroups.length ? $t("grp.deleteBody") : undefined,
+    });
+    if (!ok) return;
+    try {
+      for (const h of hostsIn) {
+        await rpc.itemPut<Host>({ kind: "host", id: h.id, item: { ...h.item, group_id: parent } });
+      }
+      for (const g of subgroups) {
+        await rpc.itemPut<Group>({ kind: "group", id: g.id, item: { ...g.item, parent_id: parent } });
+      }
+      await rpc.itemDelete({ kind: "group", id: group.id });
+      if ($hostsGroupFilter === group.id) hostsGroupFilter.set(parent);
+      await Promise.all([refreshGroups(), refreshHosts()]);
     } catch (err) {
       toast.error(errorText(err, $t("toast.error")));
     }
@@ -253,12 +304,26 @@
           <Icon name="chev" />
         </button>
       </div>
+      <button class="btn btn-soft" on:click={newGroupHere}>
+        <Icon name="group" />
+        <span>{$t("mn.group")}</span>
+      </button>
       {#if currentGroup}
         <button class="btn btn-ghost" on:click={goUp}>
           <Icon name="cright" class="flip" />
-          <span>{$t("hosts.groupBack")}</span>
+          <span>{$t("grp.up")}</span>
         </button>
-        <span class="badge">{currentGroup.item.name}</span>
+        <nav class="crumbs" aria-label={$t("h.group")}>
+          <button class="crumb" on:click={() => hostsGroupFilter.set(null)}>{$t("hosts.groupBack")}</button>
+          {#each currentPath as g (g.id)}
+            <span class="sep">/</span>
+            {#if g.id === currentGroup.id}
+              <button class="crumb current" on:click={(e) => openGroupMenu(e, g, false)}>{g.item.name}</button>
+            {:else}
+              <button class="crumb" on:click={() => openGroup(g)}>{g.item.name}</button>
+            {/if}
+          {/each}
+        </nav>
       {/if}
       <div class="spacer"></div>
     </div>
@@ -279,11 +344,20 @@
             tabindex="0"
             on:click={() => openGroup(g)}
             on:keydown={(e) => e.key === "Enter" && openGroup(g)}
+            on:contextmenu={(e) => openGroupMenu(e, g, true)}
           >
             <span class="round orange"><Icon name="group" /></span>
             <span class="meta">
               <div class="item-title">{g.item.name}</div>
-              <div class="item-sub">{$hosts.filter((h) => h.item.group_id === g.id).length} hosts</div>
+              <div class="item-sub">{format($t("grp.count"), { n: hostCount($groups, $hosts, g.id) })}</div>
+            </span>
+            <span class="item-actions">
+              <button class="icon-btn sm" title={$t("a.edit")} on:click|stopPropagation={() => editGroup(g)}>
+                <Icon name="pencil" />
+              </button>
+              <button class="icon-btn sm" aria-label="More" on:click|stopPropagation={(e) => openGroupMenu(e, g, false)}>
+                <Icon name="dots" />
+              </button>
             </span>
           </div>
         {/each}
@@ -311,6 +385,9 @@
                 {#if h.item.tags.length}· {h.item.tags.join(", ")}{/if}
               </div>
             </span>
+            {#if isTelnet(h.item)}
+              <span class="badge warn" title={$t("h.telnetWarn")}>Telnet</span>
+            {/if}
             {#if h.vault_id && $vaultNames.get(h.vault_id)}
               <span class="badge accent">{$vaultNames.get(h.vault_id)}</span>
             {/if}
@@ -355,9 +432,11 @@
     <button class="menu-item" on:click={doConnectNewTab}>
       <Icon name="plus" /><span>{$t("c.newTab")}</span>
     </button>
-    <button class="menu-item" on:click={doSftp}>
-      <Icon name="folder" /><span>{$t("c.sftp")}</span>
-    </button>
+    {#if !isTelnet(menu.host.item)}
+      <button class="menu-item" on:click={doSftp}>
+        <Icon name="folder" /><span>{$t("c.sftp")}</span>
+      </button>
+    {/if}
     <button class="menu-item" on:click={doRunSnippet}>
       <Icon name="code" /><span>{$t("c.runSnip")}</span>
     </button>
@@ -384,6 +463,23 @@
       <Icon name="trash" /><span>{$t("a.remove")}</span><span class="kbd">Del</span>
     </button>
   </Menu>
+{:else if menu?.kind === "group" && menu.group}
+  {@const grp = menu.group}
+  <Menu x={menu.x} y={menu.y} onClose={() => (menu = null)}>
+    <button class="menu-item" on:click={() => { openGroup(grp); menu = null; }}>
+      <Icon name="folder" /><span>{$t("grp.open")}</span>
+    </button>
+    <button class="menu-item" on:click={() => editGroup(grp)}>
+      <Icon name="pencil" /><span>{$t("grp.edit")}</span>
+    </button>
+    <button class="menu-item" on:click={() => newSubgroup(grp)}>
+      <Icon name="plus" /><span>{$t("grp.sub")}</span>
+    </button>
+    <div class="menu-sep"></div>
+    <button class="menu-item danger" on:click={() => removeGroup(grp)}>
+      <Icon name="trash" /><span>{$t("a.remove")}</span>
+    </button>
+  </Menu>
 {:else if menu?.kind === "move"}
   <Menu x={menu.x} y={menu.y} onClose={() => (menu = null)}>
     <div class="menu-label">{$t("h.group")}</div>
@@ -392,7 +488,7 @@
     </button>
     {#each $groups as g (g.id)}
       <button class="menu-item" on:click={() => moveTo(g.id)}>
-        <Icon name="group" /><span>{g.item.name}</span>
+        <Icon name="group" /><span>{groupPath($groups, g.id).map((x) => x.item.name).join(" / ")}</span>
       </button>
     {/each}
   </Menu>
@@ -401,5 +497,29 @@
 <style>
   :global(.flip) {
     transform: scaleX(-1);
+  }
+  .crumbs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+  .crumb {
+    padding: 4px 8px;
+    border-radius: var(--r-pill);
+    font-size: 13px;
+    color: var(--text-2);
+  }
+  .crumb:hover {
+    color: var(--text);
+    background: var(--bg-subtle);
+  }
+  .crumb.current {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .sep {
+    color: var(--text-3);
   }
 </style>
