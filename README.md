@@ -86,7 +86,25 @@ The installer starts the server (with its own PostgreSQL, or one you already hav
 
 Then, in the app, open **Account & sync**, enter the server address and sign up. The first account becomes the owner. Re-run the installer with `--upgrade` to update.
 
-The server is one image for amd64 and arm64, [`ghcr.io/nakharina/ourshell-server`](https://github.com/NakharinA/OurShell/pkgs/container/ourshell-server), if you'd rather run it yourself. See [`docs/self-hosting.md`](docs/self-hosting.md) for options, backups and running it by hand.
+### Deploy the Docker image yourself
+
+No script needed: the server is one public image for amd64 and arm64 that any Docker tool can deploy.
+
+| Setting | Value |
+|---|---|
+| Docker image | `ghcr.io/nakharina/ourshell-server:latest` (or a version, e.g. `:0.8.0`) |
+| Registry URL | `https://ghcr.io` (GitHub Container Registry) |
+| Username | none: the image is public |
+| Password | none: the image is public |
+| Port | `8443` (HTTP); `8444` for built-in HTTPS, published as `443` |
+| Volume | a named volume at `/data` (configuration and master key) |
+| Database | PostgreSQL: set `DATABASE_URL`, or enter it in the setup wizard |
+
+If a tool insists on credentials for a registry (some do when you add `ghcr.io` as a registry), use any GitHub username and a [personal access token](https://github.com/settings/tokens) with only the `read:packages` scope, never your GitHub password.
+
+For Synology Container Manager, Portainer and similar, paste the ready-made compose file (server + PostgreSQL) from [Without the installer: paste a compose file](docs/self-hosting.md#without-the-installer-paste-a-compose-file). Then open the container's log for the setup code and go to `http://<server-address>:8443/setup`.
+
+See [`docs/self-hosting.md`](docs/self-hosting.md) for all options, HTTPS, upgrades and backups.
 
 ## Installing on macOS
 
