@@ -649,3 +649,26 @@ async fn setup_wizard_behind_proxy() {
     assert!(cfg.proxy.enabled() && cfg.tls.is_none());
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn invite_page_is_public() {
+    let Some(app) = common::setup().await else {
+        return;
+    };
+    let dir = temp_dir();
+    let web = admin_router(&app, &dir, vec![]);
+    for path in ["/invite", "/web/invite.js"] {
+        let res = web
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{path} needs no admin login");
+        if path == "/invite" {
+            let csp = res.headers()[header::CONTENT_SECURITY_POLICY]
+                .to_str()
+                .unwrap();
+            assert!(csp.contains("script-src 'self'"));
+        }
+    }
+}

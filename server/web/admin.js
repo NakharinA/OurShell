@@ -37,7 +37,8 @@ async function loadOverview() {
   $("#s-users").textContent = s.users;
   $("#s-devices").textContent = s.devices;
   $("#s-items").textContent = s.items;
-  $("#o-url").textContent = s.public_url || `${location.protocol}//${location.host}`;
+  serverUrl = s.public_url || location.origin;
+  $("#o-url").textContent = serverUrl;
   $("#o-noowner").hidden = s.has_owner;
   $("#o-version").textContent = s.version;
   $("#o-db").textContent = `${s.database} (PostgreSQL ${s.database_version})`;
@@ -93,15 +94,33 @@ async function toggleUser(u, button) {
   }
 }
 
+/** The address clients use: the configured public URL, else this page's origin. */
+let serverUrl = "";
+
+async function inviteLink(code) {
+  if (!serverUrl) {
+    const s = await api("/admin/api/status");
+    serverUrl = s.public_url || location.origin;
+  }
+  return `${serverUrl.replace(/\/+$/, "")}/invite#code=${encodeURIComponent(code)}`;
+}
+
+async function copyInviteLink(code, button) {
+  copy(await inviteLink(code), button);
+}
+
 async function loadInvites() {
   const { invites } = await api("/admin/api/invites");
   const body = $("#invites");
   body.replaceChildren();
   if (!invites.length) {
-    body.append(el("tr", {}, el("td", { colspan: 4, class: "empty" }, "No invites yet.")));
+    body.append(el("tr", {}, el("td", { colspan: 5, class: "empty" }, "No invites yet.")));
     return;
   }
   for (const i of invites) {
+    const action = i.used_by
+      ? null
+      : el("button", { type: "button", class: "small", onclick: (e) => copyInviteLink(i.code, e.currentTarget) }, "Copy link");
     body.append(
       el(
         "tr",
@@ -110,6 +129,7 @@ async function loadInvites() {
         el("td", {}, i.role),
         el("td", {}, new Date(i.created_at).toLocaleString()),
         el("td", {}, i.used_by ? i.used_by : el("span", { class: "pill ok" }, "Unused")),
+        el("td", {}, action),
       ),
     );
   }
@@ -121,7 +141,15 @@ $("#invite-new").addEventListener("click", async (e) => {
     const r = await busy(e.currentTarget, () =>
       api("/admin/api/invites", { method: "POST", body: { role: $("#invite-role").value } }),
     );
-    note(msg, "ok", `New invite code: ${r.code}`);
+    const link = await inviteLink(r.code);
+    msg.className = "note ok";
+    msg.hidden = false;
+    msg.replaceChildren(
+      el("div", {}, "New invite: ", el("b", { class: "mono" }, r.code)),
+      el("div", { class: "mono" }, link),
+      el("button", { type: "button", class: "small", onclick: (ev) => copy(link, ev.currentTarget) }, "Copy link"),
+    );
+    copy(link, e.currentTarget);
     await loadInvites();
   } catch (err) {
     note(msg, "err", err.message);

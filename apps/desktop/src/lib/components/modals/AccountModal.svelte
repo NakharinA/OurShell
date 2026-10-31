@@ -9,6 +9,7 @@
   import { toast, errorText } from "../../stores/toast";
   import type { DeviceInfo } from "../../types";
   import { serverErrorCode } from "../../serverError";
+  import { parseInviteLink } from "../../inviteLink";
 
   /** Signed out: sign in to an existing account, or create one. */
   let mode: "signin" | "signup" = "signin";
@@ -52,6 +53,15 @@
     password2 = "";
     totp = "";
     totpNeeded = false;
+  }
+
+  /** A pasted invite link fills in the server and the invite code. */
+  function onServerInput(): void {
+    const invite = parseInviteLink(server);
+    if (!invite) return;
+    server = invite.server;
+    inviteCode = invite.code;
+    if (mode !== "signup") setMode("signup");
   }
 
   function setMode(m: typeof mode): void {
@@ -210,7 +220,7 @@
         <form on:submit|preventDefault={mode === "signin" ? login : signup}>
           <div class="field">
             <label for="acct-server">{$t("acct.server")}</label>
-            <div class="input"><input id="acct-server" bind:value={server} placeholder="https://sync.example.com" autocomplete="url" /></div>
+            <div class="input"><input id="acct-server" bind:value={server} on:input={onServerInput} placeholder="https://sync.example.com" autocomplete="url" /></div>
           </div>
           <div class="field">
             <label for="acct-email">{$t("acct.email")}</label>

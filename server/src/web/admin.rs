@@ -104,6 +104,9 @@ pub fn router(ctx: AdminCtx) -> Router {
         .route("/", get(|| async { Redirect::to("/admin") }))
         .route("/setup", get(|| async { Redirect::to("/admin") }))
         .route("/admin", get(|| async { super::page(super::ADMIN_HTML) }))
+        // Public: where an invite link (`/invite#code=...`) lands. The code
+        // is in the fragment, so it's never sent here.
+        .route("/invite", get(|| async { super::page(super::INVITE_HTML) }))
         .nest("/admin/api", api)
         .merge(super::assets())
         .with_state(ctx)

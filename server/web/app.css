@@ -152,7 +152,7 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 th { color: var(--text-3); font-weight: 600; font-size: 12.5px; }
-td.mono { font-family: var(--mono); }
+td.mono, .mono { font-family: var(--mono); }
 .table-wrap { overflow-x: auto; }
 .pill { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--subtle); color: var(--text-2); }
 .pill.ok { background: var(--ok-soft); color: var(--ok); }
