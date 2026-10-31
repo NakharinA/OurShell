@@ -7,7 +7,8 @@
 # metadata (see docs/threat-model.md) -- the server never stores anything
 # that decrypts a user's vault -- but treat the backup as sensitive anyway:
 # it is still enough to impersonate OPAQUE records and sessions if stolen,
-# and config.toml holds the server's master key and admin password hash.
+# and config.toml holds the server's master key (which also decrypts the
+# server settings stored in the database, like the admin password hash).
 #
 # Usage:
 #   ./backup.sh [output-dir]            # in an install dir made by install-server.sh
