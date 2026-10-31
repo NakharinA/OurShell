@@ -44,6 +44,9 @@ pub struct TestApp {
     /// Connected with the test's isolated schema already on its search_path,
     /// so raw queries here (e.g. at-rest checks) see the same rows the app does.
     pub pool: PgPool,
+    /// The state behind `router`, for building extra routers (e.g. the
+    /// admin page) over the same database.
+    pub state: AppState,
 }
 
 /// Spins up a fresh, isolated Postgres schema, runs migrations into it, and
@@ -109,9 +112,13 @@ pub async fn setup_with(configure: impl FnOnce(&mut Config)) -> Option<TestApp> 
     let state = AppState::new(pool.clone(), config)
         .await
         .expect("failed to build AppState");
-    let router = build_router(state);
+    let router = build_router(state.clone());
 
-    Some(TestApp { router, pool })
+    Some(TestApp {
+        router,
+        pool,
+        state,
+    })
 }
 
 fn test_config(database_url: String) -> Config {
@@ -127,6 +134,9 @@ fn test_config(database_url: String) -> Config {
         rate_limit_per_min: 1000,
         session_ttl_hours: 24,
         oidc: None,
+        public_url: None,
+        tls: None,
+        admin_password_hash: None,
     }
 }
 

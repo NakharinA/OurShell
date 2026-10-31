@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OurShell server admin</title>
+<link rel="icon" href="/web/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/web/app.css">
+<script src="/web/common.js" defer></script>
+<script src="/web/admin.js" defer></script>
+</head>
+<body>
+<main class="shell">
+  <header class="brand">
+    <img src="/web/logo.svg" alt="">
+    <div>
+      <h1>OurShell server</h1>
+      <p>Admin <span id="version"></span></p>
+    </div>
+    <span class="spacer"></span>
+    <button type="button" class="small" id="logout" hidden>Sign out</button>
+  </header>
+
+  <form class="card" id="login" hidden>
+    <h2>Sign in</h2>
+    <p class="lead">Enter the admin password you chose during setup.</p>
+    <label class="field"><span>Admin password</span><input id="login-pw" type="password" autocomplete="current-password" required></label>
+    <p class="note" id="login-msg" hidden></p>
+    <div class="actions"><button class="primary" type="submit">Sign in</button></div>
+  </form>
+
+  <div id="app" hidden>
+    <nav class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="overview" class="on">Overview</button>
+      <button type="button" role="tab" data-tab="users">Users</button>
+      <button type="button" role="tab" data-tab="invites">Invites</button>
+      <button type="button" role="tab" data-tab="settings">Settings</button>
+    </nav>
+
+    <section data-view="overview">
+      <div class="stats">
+        <div class="stat"><b id="s-users">–</b><span>Accounts</span></div>
+        <div class="stat"><b id="s-devices">–</b><span>Devices</span></div>
+        <div class="stat"><b id="s-items">–</b><span>Synced items</span></div>
+      </div>
+      <div class="card">
+        <h2>Connect the OurShell app</h2>
+        <p class="lead">In the app, open <b>Account &amp; sync</b> and enter this as the server:</p>
+        <div class="secret" id="o-url"></div>
+        <p class="note warn" id="o-noowner" hidden>Nobody has signed up yet. The first account becomes the owner: create yours now.</p>
+      </div>
+      <div class="card">
+        <h2>Server</h2>
+        <dl class="kv">
+          <dt>Version</dt><dd id="o-version"></dd>
+          <dt>Database</dt><dd id="o-db"></dd>
+          <dt>HTTPS</dt><dd id="o-tls"></dd>
+        </dl>
+      </div>
+    </section>
+
+    <section data-view="users" hidden>
+      <div class="card">
+        <h2>Users</h2>
+        <p class="lead">Disabling a user signs them out everywhere and blocks sign-in. Their encrypted data stays.</p>
+        <p class="note" id="users-msg" hidden></p>
+        <div class="table-wrap">
+          <table><thead><tr><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody id="users"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <section data-view="invites" hidden>
+      <div class="card">
+        <h2>Invites</h2>
+        <p class="lead">Each code creates one account. Give it to the person along with the server address.</p>
+        <div class="row">
+          <label class="field"><span>Role</span>
+            <select id="invite-role"><option value="Member">Member</option><option value="Admin">Admin</option></select>
+          </label>
+          <div class="actions"><button class="primary" type="button" id="invite-new">Create invite</button></div>
+        </div>
+        <p class="note" id="invite-msg" hidden></p>
+        <div class="table-wrap">
+          <table><thead><tr><th>Code</th><th>Role</th><th>Created</th><th>Used by</th></tr></thead><tbody id="invites"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <section data-view="settings" hidden>
+      <form class="card" id="settings">
+        <h2>Settings</h2>
+        <p class="lead">Saving applies changes immediately; the server reloads in place. Settings marked <span class="locked">set by environment</span> come from the container's environment variables and can only be changed there.</p>
+        <label class="field" data-key="public_url"><span>Public URL</span><input name="public_url" type="url" placeholder="https://sync.example.com"></label>
+        <label class="check" data-key="signups_enabled"><input name="signups_enabled" type="checkbox"> Allow new accounts</label>
+        <label class="check" data-key="invite_only"><input name="invite_only" type="checkbox"> Require an invite code</label>
+        <div class="row">
+          <label class="field" data-key="max_devices_per_user"><span>Devices per account</span><input name="max_devices_per_user" type="number" min="0"><small>0 = unlimited</small></label>
+          <label class="field" data-key="rate_limit_per_min"><span>Sign-in attempts per minute per IP</span><input name="rate_limit_per_min" type="number" min="0"><small>0 = unlimited</small></label>
+          <label class="field" data-key="session_ttl_hours"><span>Session lifetime (hours)</span><input name="session_ttl_hours" type="number" min="1"></label>
+        </div>
+        <h2 class="gap">HTTPS (Let's Encrypt)</h2>
+        <div class="row">
+          <label class="field" data-key="tls_domain"><span>Domain</span><input name="tls_domain" type="text" placeholder="empty = plain HTTP"></label>
+          <label class="field" data-key="tls_email"><span>Email</span><input name="tls_email" type="email"></label>
+        </div>
+        <h2 class="gap">Single sign-on (OIDC)</h2>
+        <p class="hint">Lets people identify with your company login. Leave the issuer empty to turn it off.</p>
+        <div data-key="oidc">
+          <label class="field"><span>Issuer URL</span><input name="oidc_issuer" type="url"></label>
+          <div class="row">
+            <label class="field"><span>Client ID</span><input name="oidc_client_id" type="text"></label>
+            <label class="field"><span>Client secret</span><input name="oidc_client_secret" type="password" autocomplete="off"><small id="oidc-secret-hint"></small></label>
+          </div>
+          <label class="field"><span>Redirect URL</span><input name="oidc_redirect_url" type="url"></label>
+        </div>
+        <p class="note" id="settings-msg" hidden></p>
+        <div class="actions"><button class="primary" type="submit">Save settings</button></div>
+      </form>
+
+      <form class="card" id="password">
+        <h2>Admin password</h2>
+        <div class="row">
+          <label class="field"><span>Current password</span><input name="current" type="password" autocomplete="current-password" required></label>
+          <label class="field"><span>New password</span><input name="new" type="password" autocomplete="new-password" minlength="10" required></label>
+        </div>
+        <p class="note" id="password-msg" hidden></p>
+        <div class="actions"><button type="submit">Change password</button></div>
+      </form>
+    </section>
+  </div>
+
+  <footer>OurShell · <a href="https://github.com/NakharinA/OurShell/blob/main/docs/self-hosting.md">Self-hosting guide</a></footer>
+</main>
+</body>
+</html>

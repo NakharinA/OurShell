@@ -14,15 +14,18 @@ pub mod error;
 pub mod oidc;
 pub mod rate_limit;
 pub mod routes;
+pub mod settings;
 pub mod sqlx;
 pub mod state;
+pub mod web;
 
 use std::net::SocketAddr;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use axum::serve::ListenerExt;
 
-use crate::config::Config;
+use crate::config::{Config, DEFAULT_BIND_ADDR};
 use crate::sqlx::{migrate::Migrator, PgPoolOptions};
 use crate::state::AppState;
 
@@ -57,25 +60,159 @@ pub async fn build_state(config: Config) -> Result<AppState> {
     AppState::new(pool, config).await
 }
 
+/// Serves until the process is stopped. Starts in setup mode (the `/setup`
+/// wizard) when there is no database URL or master key yet, and rebuilds
+/// the whole app in place, on the same socket, whenever the setup wizard or
+/// the admin page changes the configuration.
 pub async fn run() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .init();
 
-    let config = Config::from_env()?;
-    let bind_addr = config.bind_addr.clone();
-    let state = build_state(config).await?;
-    let app = routes::build_router(state);
-
+    let data_dir = settings::data_dir();
+    let bind_addr = settings::load(&data_dir)?
+        .values
+        .bind_addr
+        .unwrap_or_else(|| DEFAULT_BIND_ADDR.to_string());
     let addr: SocketAddr = bind_addr
         .parse()
         .with_context(|| format!("BIND_ADDR {bind_addr:?} is not a valid socket address"))?;
-    tracing::info!(%addr, "ourshell-server listening");
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
+    let listener = SharedListener(std::sync::Arc::new(
+        tokio::net::TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("failed to listen on {addr}"))?,
+    ));
+    tracing::info!(%addr, data_dir = %data_dir.display(), "ourshell-server listening");
+
+    let reload = web::Reload::default();
+    let sessions = std::sync::Arc::new(web::admin::Sessions::default());
+    loop {
+        let effective = settings::load(&data_dir)?;
+        let mut changed = reload.subscribe();
+        let app = match Config::from_effective(&effective)? {
+            Some(config) => {
+                let state = build_state(config).await?;
+                routes::build_router(state.clone()).merge(web::admin::router(
+                    web::admin::AdminCtx {
+                        state,
+                        data_dir: data_dir.clone(),
+                        sessions: sessions.clone(),
+                        reload: reload.clone(),
+                        env_locked: std::sync::Arc::new(effective.env_locked.clone()),
+                    },
+                ))
+            }
+            None => {
+                let code = settings::setup_code(&data_dir)?;
+                tracing::warn!(
+                    "this server is not set up yet: open http://<this-host>:{}/setup in a browser and enter the setup code {code}",
+                    addr.port()
+                );
+                web::setup::router(web::setup::SetupCtx::new(
+                    data_dir.clone(),
+                    code,
+                    effective,
+                    reload.clone(),
+                ))
+            }
+        };
+        // `tap_io` (a no-op) because axum provides `SocketAddr` connect
+        // info, which the rate limiter needs, for `TapIo` listeners.
+        axum::serve(
+            listener.clone().tap_io(|_| {}),
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            let _ = changed.changed().await;
+        })
+        .await?;
+        tracing::info!("configuration changed; reloading");
+    }
+}
+
+/// The one bound socket, shared by every serve generation across reloads.
+/// (Duplicating the socket handle instead doesn't work on Windows: tokio
+/// gets no readiness events for the copy.)
+#[derive(Clone)]
+struct SharedListener(std::sync::Arc<tokio::net::TcpListener>);
+
+impl axum::serve::Listener for SharedListener {
+    type Io = tokio::net::TcpStream;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            match self.0.accept().await {
+                Ok(conn) => return conn,
+                // Like axum's own listener: e.g. out of file descriptors.
+                Err(e) => {
+                    tracing::warn!(error = %e, "accept failed");
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.0.local_addr()
+    }
+}
+
+/// `ourshell-server healthcheck`: exit status for Docker's HEALTHCHECK
+/// (the runtime image has no curl).
+pub async fn healthcheck() -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let bind = settings::load(&settings::data_dir())?
+        .values
+        .bind_addr
+        .unwrap_or_else(|| DEFAULT_BIND_ADDR.to_string());
+    let port = bind.rsplit_once(':').map_or("8443", |(_, p)| p);
+    let mut stream = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")),
     )
-    .await?;
+    .await
+    .context("timed out")??;
+    stream
+        .write_all(b"GET /v1/health HTTP/1.0\r\nHost: localhost\r\n\r\n")
+        .await?;
+    let mut response = String::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        stream.read_to_string(&mut response),
+    )
+    .await
+    .context("timed out")??;
+    let status = response.lines().next().unwrap_or_default();
+    anyhow::ensure!(status.contains(" 200 "), "unhealthy: {status}");
+    Ok(())
+}
+
+/// `ourshell-server set-admin-password`: sets the `/admin` password from
+/// stdin (for env-only deployments, or a forgotten password). Restart the
+/// server to apply it.
+pub fn set_admin_password() -> Result<()> {
+    let password = match std::env::var("OURSHELL_ADMIN_PASSWORD") {
+        Ok(p) if !p.is_empty() => p,
+        _ => {
+            eprint!("New admin password: ");
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            line.trim_end_matches(['\r', '\n']).to_string()
+        }
+    };
+    anyhow::ensure!(
+        password.chars().count() >= web::password::MIN_LEN,
+        "the password needs at least {} characters",
+        web::password::MIN_LEN
+    );
+    let dir = settings::data_dir();
+    let mut file = settings::read(&dir)?;
+    file.admin_password_hash = Some(web::password::hash(&password)?);
+    settings::write(&dir, &file)?;
+    eprintln!("Saved. Restart the server to apply it.");
     Ok(())
 }
