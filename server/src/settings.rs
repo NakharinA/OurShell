@@ -45,6 +45,31 @@ pub struct FileConfig {
     /// Proxies whose `X-Forwarded-*` headers are believed (IPs or CIDRs);
     /// empty = loopback and private ranges.
     pub trusted_proxies: Option<Vec<String>>,
+    /// Scheduled encrypted backups to S3-compatible storage (see `crate::backup`).
+    pub backup: Option<FileBackup>,
+}
+
+/// `[backup]`: every key optional; defaults live in `crate::backup::BackupConfig`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FileBackup {
+    pub enabled: Option<bool>,
+    /// `https://s3.eu-central-1.amazonaws.com`, `https://<account>.r2.cloudflarestorage.com`,
+    /// `http://nas:9000`, ... Empty = AWS S3 for `region`.
+    pub endpoint: Option<String>,
+    pub region: Option<String>,
+    pub bucket: Option<String>,
+    /// Key prefix ("folder") inside the bucket, e.g. `ourshell/`.
+    pub prefix: Option<String>,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
+    /// `https://endpoint/bucket/key` instead of `https://bucket.endpoint/key`.
+    pub path_style: Option<bool>,
+    /// Encrypts every backup file (Argon2id -> XChaCha20-Poly1305).
+    pub passphrase: Option<String>,
+    pub interval_hours: Option<u32>,
+    /// How many backup files to keep in the bucket; 0 = all.
+    pub keep: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,7 +143,60 @@ pub const ENV_KEYS: &[(&str, &str)] = &[
     ("tls_email", "OURSHELL_TLS_EMAIL"),
     ("behind_proxy", "OURSHELL_BEHIND_PROXY"),
     ("trusted_proxies", "OURSHELL_TRUSTED_PROXIES"),
+    ("backup_enabled", "OURSHELL_BACKUP_ENABLED"),
+    ("backup_endpoint", "OURSHELL_BACKUP_S3_ENDPOINT"),
+    ("backup_region", "OURSHELL_BACKUP_S3_REGION"),
+    ("backup_bucket", "OURSHELL_BACKUP_S3_BUCKET"),
+    ("backup_prefix", "OURSHELL_BACKUP_S3_PREFIX"),
+    ("backup_access_key_id", "OURSHELL_BACKUP_S3_ACCESS_KEY_ID"),
+    (
+        "backup_secret_access_key",
+        "OURSHELL_BACKUP_S3_SECRET_ACCESS_KEY",
+    ),
+    ("backup_path_style", "OURSHELL_BACKUP_S3_PATH_STYLE"),
+    ("backup_passphrase", "OURSHELL_BACKUP_PASSPHRASE"),
+    ("backup_interval_hours", "OURSHELL_BACKUP_INTERVAL_HOURS"),
+    ("backup_keep", "OURSHELL_BACKUP_KEEP"),
 ];
+
+/// Removes the value behind an [`ENV_KEYS`] key (or `"oidc"`) from `file`,
+/// e.g. so a restored `config.toml` doesn't carry values the environment
+/// sets anyway.
+pub fn clear_key(file: &mut FileConfig, key: &str) {
+    match key {
+        "database_url" => file.database_url = None,
+        "bind_addr" => file.bind_addr = None,
+        "server_master_key" => file.server_master_key = None,
+        "public_url" => file.public_url = None,
+        "signups_enabled" => file.signups_enabled = None,
+        "invite_only" => file.invite_only = None,
+        "max_devices_per_user" => file.max_devices_per_user = None,
+        "rate_limit_per_min" => file.rate_limit_per_min = None,
+        "session_ttl_hours" => file.session_ttl_hours = None,
+        "tls_domain" | "tls_email" => file.tls = None,
+        "behind_proxy" => file.behind_proxy = None,
+        "trusted_proxies" => file.trusted_proxies = None,
+        "oidc" => file.oidc = None,
+        k => {
+            if let (Some(b), Some(field)) = (file.backup.as_mut(), k.strip_prefix("backup_")) {
+                match field {
+                    "enabled" => b.enabled = None,
+                    "endpoint" => b.endpoint = None,
+                    "region" => b.region = None,
+                    "bucket" => b.bucket = None,
+                    "prefix" => b.prefix = None,
+                    "access_key_id" => b.access_key_id = None,
+                    "secret_access_key" => b.secret_access_key = None,
+                    "path_style" => b.path_style = None,
+                    "passphrase" => b.passphrase = None,
+                    "interval_hours" => b.interval_hours = None,
+                    "keep" => b.keep = None,
+                    _ => {}
+                }
+            }
+        }
+    }
+}
 
 /// The file config with environment overrides applied, plus which keys the
 /// environment pinned (`"oidc"` stands for all four `OIDC_*` variables).
@@ -153,6 +231,23 @@ pub fn apply_env(file: &FileConfig, env: &dyn Fn(&str) -> Option<String>) -> Res
             "tls_email" => v.tls.get_or_insert_with(Default::default).email = Some(s),
             "behind_proxy" => v.behind_proxy = Some(crate::config::parse_bool(var, &s)?),
             "trusted_proxies" => v.trusted_proxies = Some(crate::proxy::split_list(&s)),
+            k if k.starts_with("backup_") => {
+                let b = v.backup.get_or_insert_with(Default::default);
+                match &k["backup_".len()..] {
+                    "enabled" => b.enabled = Some(crate::config::parse_bool(var, &s)?),
+                    "endpoint" => b.endpoint = Some(s),
+                    "region" => b.region = Some(s),
+                    "bucket" => b.bucket = Some(s),
+                    "prefix" => b.prefix = Some(s),
+                    "access_key_id" => b.access_key_id = Some(s),
+                    "secret_access_key" => b.secret_access_key = Some(s),
+                    "path_style" => b.path_style = Some(crate::config::parse_bool(var, &s)?),
+                    "passphrase" => b.passphrase = Some(s),
+                    "interval_hours" => b.interval_hours = Some(parse_u32(var, &s)?),
+                    "keep" => b.keep = Some(parse_u32(var, &s)?),
+                    _ => unreachable!("every backup ENV_KEYS entry is handled"),
+                }
+            }
             _ => unreachable!("every ENV_KEYS entry is handled"),
         }
     }
@@ -292,6 +387,62 @@ mod tests {
             &env_of(&[("OURSHELL_BEHIND_PROXY", "maybe")])
         )
         .is_err());
+    }
+
+    #[test]
+    fn backup_env_vars_override_the_backup_table() {
+        let file = FileConfig {
+            backup: Some(FileBackup {
+                bucket: Some("file-bucket".into()),
+                keep: Some(5),
+                passphrase: Some("from the file".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let eff = apply_env(
+            &file,
+            &env_of(&[
+                ("OURSHELL_BACKUP_ENABLED", "yes"),
+                ("OURSHELL_BACKUP_S3_BUCKET", " env-bucket "),
+                ("OURSHELL_BACKUP_S3_PATH_STYLE", "1"),
+                ("OURSHELL_BACKUP_INTERVAL_HOURS", "6"),
+                ("OURSHELL_BACKUP_S3_SECRET_ACCESS_KEY", "s3cret"),
+            ]),
+        )
+        .unwrap();
+        let b = eff.values.backup.clone().unwrap();
+        assert_eq!(b.enabled, Some(true));
+        assert_eq!(b.bucket.as_deref(), Some("env-bucket"));
+        assert_eq!(b.path_style, Some(true));
+        assert_eq!(b.interval_hours, Some(6));
+        assert_eq!(b.keep, Some(5));
+        assert_eq!(b.passphrase.as_deref(), Some("from the file"));
+        assert_eq!(b.secret_access_key.as_deref(), Some("s3cret"));
+        for k in [
+            "backup_enabled",
+            "backup_bucket",
+            "backup_path_style",
+            "backup_interval_hours",
+            "backup_secret_access_key",
+        ] {
+            assert!(eff.env_locked.contains(&k), "{k}");
+        }
+        assert!(!eff.env_locked.contains(&"backup_keep"));
+
+        let mut cleared = eff.values.clone();
+        for k in &eff.env_locked {
+            clear_key(&mut cleared, k);
+        }
+        let b = cleared.backup.unwrap();
+        assert_eq!((b.bucket, b.enabled, b.keep), (None, None, Some(5)));
+
+        for bad in [
+            ("OURSHELL_BACKUP_KEEP", "-1"),
+            ("OURSHELL_BACKUP_S3_PATH_STYLE", "sometimes"),
+        ] {
+            assert!(apply_env(&FileConfig::default(), &env_of(&[bad])).is_err());
+        }
     }
 
     #[test]

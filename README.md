@@ -16,6 +16,7 @@ Secrets are always encrypted on the client before they reach the server. See [th
 - **SFTP, port forwarding and snippets**: browse and transfer files, local/remote forwards, run saved commands on one or many hosts.
 - **Encrypted vault**: everything lives in a local vault encrypted with your master password (Argon2id + XChaCha20-Poly1305), with a recovery phrase.
 - **Sync across computers**: an optional self-hosted server that only ever stores ciphertext. Team vaults let you share hosts with other people.
+- **Server backups**: the sync server backs itself up on a schedule, encrypted with your passphrase, to any S3-compatible storage (AWS S3, R2, B2, Wasabi, MinIO, Synology C2), and skips the upload when nothing changed.
 - **AI with approval**: an MCP server lets AI assistants list and use hosts you opt in, with every action approved by you in the app or CLI.
 - **Imports**: `~/.ssh/config` and Termius CSV.
 
