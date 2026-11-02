@@ -7,6 +7,11 @@
 //! Tauri event. If the socket is not reachable, it spawns the agent binary
 //! (as a Tauri sidecar, falling back to `ourshell` on PATH, then to a dev
 //! build under `target/debug`) and retries.
+//!
+//! An agent left running from before an upgrade keeps serving the old code
+//! (the new binary on disk is never loaded), so after the handshake the
+//! bridge compares the agent's version with its own and, on a mismatch, asks
+//! that agent to shut down and starts the bundled one in its place.
 
 use std::collections::HashMap;
 use std::io;
@@ -16,7 +21,7 @@ use std::time::Duration;
 
 use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::GenericFilePath;
-use ourshell_proto::agent::{method, ClientKind, HelloParams};
+use ourshell_proto::agent::{method, ClientKind, HelloParams, HelloResult};
 use ourshell_proto::rpc::{Request, RpcError, ServerMessage};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
@@ -27,6 +32,14 @@ use tokio::sync::{mpsc, oneshot};
 /// Error code used locally (not defined by the agent) for bridge-level failures
 /// such as "could not reach the agent at all".
 const BRIDGE_ERROR: i64 = -32000;
+
+/// This app's version. Releases bump every manifest together
+/// (`scripts/check-version.mjs`), so the bundled agent reports the same one.
+const DESKTOP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// How long to wait for an outdated agent to stop listening before giving up
+/// on replacing it.
+const STALE_SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 
 enum Cmd {
     Call {
@@ -92,6 +105,9 @@ fn emit_status(app: &AppHandle, connected: bool, detail: impl Into<String>) {
 async fn actor_loop(app: AppHandle, mut cmd_rx: mpsc::UnboundedReceiver<Cmd>) {
     let mut backoff = Duration::from_millis(500);
     const MAX_BACKOFF: Duration = Duration::from_secs(10);
+    // Replace an outdated agent at most once per app run, so a mismatched
+    // binary (e.g. an older `ourshell` on PATH) can't cause a restart loop.
+    let mut replaced_stale = false;
 
     loop {
         emit_status(&app, false, "connecting");
@@ -100,7 +116,27 @@ async fn actor_loop(app: AppHandle, mut cmd_rx: mpsc::UnboundedReceiver<Cmd>) {
                 backoff = Duration::from_millis(500);
                 let mut reader = BufReader::new(&stream);
                 match handshake(&stream, &mut reader).await {
-                    Ok(()) => {
+                    Ok(agent_version) if agent_version != DESKTOP_VERSION && !replaced_stale => {
+                        replaced_stale = true;
+                        log::warn!(
+                            "agent is v{agent_version} but the app is v{DESKTOP_VERSION}; restarting it"
+                        );
+                        emit_status(&app, false, "restarting outdated agent");
+                        if let Err(e) = shut_down_agent(&stream, &mut reader).await {
+                            log::warn!("could not stop the outdated agent: {e}");
+                        }
+                        drop(reader);
+                        drop(stream);
+                        wait_for_agent_exit().await;
+                        // Reconnect now; connect_with_spawn starts the bundled agent.
+                        continue;
+                    }
+                    Ok(agent_version) => {
+                        if agent_version != DESKTOP_VERSION {
+                            log::warn!(
+                                "agent is still v{agent_version} (app v{DESKTOP_VERSION}); using it anyway"
+                            );
+                        }
                         emit_status(&app, true, "connected");
                         if let Err(e) =
                             run_connection(&app, &stream, &mut reader, &mut cmd_rx).await
@@ -246,13 +282,54 @@ async fn write_request(stream: &LocalSocketStream, req: &Request) -> io::Result<
     sender.flush().await
 }
 
-/// First request on every connection, per `docs/agent-protocol.md`. Reads through the
-/// same buffered reader `run_connection` will keep using, so no bytes the agent sent
-/// right after the hello reply (pipelined) are lost with the buffer.
-async fn handshake(
+/// Asks the agent on this connection to exit (`agent.shutdown`) and waits for
+/// its reply. The connection is already subscribed to events, so notifications
+/// may arrive first; they are skipped.
+async fn shut_down_agent(
     stream: &LocalSocketStream,
     reader: &mut BufReader<&LocalSocketStream>,
 ) -> io::Result<()> {
+    write_request(stream, &Request::new(1, method::SHUTDOWN, serde_json::json!({}))).await?;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).await? == 0 {
+            // The agent may exit before its reply is flushed; that's success too.
+            return Ok(());
+        }
+        match serde_json::from_str::<ServerMessage>(line.trim_end()) {
+            Ok(ServerMessage::Response(resp)) if resp.id == 1 => {
+                return match resp.error {
+                    Some(e) => Err(io::Error::other(format!("agent.shutdown: {e}"))),
+                    None => Ok(()),
+                };
+            }
+            _ => continue,
+        }
+    }
+}
+
+/// Waits until nothing accepts connections on the agent socket, so the next
+/// connect attempt spawns a fresh agent instead of reaching the old one.
+async fn wait_for_agent_exit() {
+    let deadline = tokio::time::Instant::now() + STALE_SHUTDOWN_WAIT;
+    while tokio::time::Instant::now() < deadline {
+        if try_connect().await.is_err() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    log::warn!("outdated agent still listening after {STALE_SHUTDOWN_WAIT:?}");
+}
+
+/// First request on every connection, per `docs/agent-protocol.md`. Reads through the
+/// same buffered reader `run_connection` will keep using, so no bytes the agent sent
+/// right after the hello reply (pipelined) are lost with the buffer. Returns the
+/// agent's version from the hello reply.
+async fn handshake(
+    stream: &LocalSocketStream,
+    reader: &mut BufReader<&LocalSocketStream>,
+) -> io::Result<String> {
     let params = HelloParams {
         protocol: ourshell_proto::AGENT_PROTOCOL_VERSION,
         client: ClientKind::Desktop,
@@ -261,7 +338,8 @@ async fn handshake(
     };
     let params = serde_json::to_value(params).map_err(io::Error::other)?;
     write_request(stream, &Request::new(0, method::HELLO, params)).await?;
-    expect_ok(reader, 0, "hello").await?;
+    let hello: HelloResult =
+        serde_json::from_value(expect_ok(reader, 0, "hello").await?).map_err(io::Error::other)?;
 
     // The agent only broadcasts events (approval requests, vault lock, AI
     // mode changes) to connections that subscribe; per-session PTY output
@@ -271,15 +349,16 @@ async fn handshake(
         &Request::new(0, method::EVENTS_SUBSCRIBE, serde_json::json!({})),
     )
     .await?;
-    expect_ok(reader, 0, "events.subscribe").await
+    expect_ok(reader, 0, "events.subscribe").await?;
+    Ok(hello.agent_version)
 }
 
-/// Reads one handshake reply and checks it is a success for `id`.
+/// Reads one handshake reply, checks it is a success for `id`, and returns its result.
 async fn expect_ok(
     reader: &mut BufReader<&LocalSocketStream>,
     id: u64,
     what: &str,
-) -> io::Result<()> {
+) -> io::Result<Value> {
     let mut line = String::new();
     let n = reader.read_line(&mut line).await?;
     if n == 0 {
@@ -294,7 +373,7 @@ async fn expect_ok(
             if let Some(err) = resp.error {
                 return Err(io::Error::other(format!("{what}: {err}")));
             }
-            Ok(())
+            Ok(resp.result.unwrap_or(Value::Null))
         }
         _ => Err(io::Error::other(format!("unexpected reply to {what}"))),
     }
