@@ -273,9 +273,22 @@ async fn pipe_agent_channel(channel: Channel<Msg>) {
     }
 }
 
-fn build_config(options: &ConnectOptions) -> client::Config {
+/// How often to send an SSH keepalive when nothing has been received from the
+/// server. Also keeps NAT and firewall mappings open on idle sessions.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Unanswered keepalives in a row before the connection is treated as dead
+/// (so a dropped network is noticed after about 90 seconds).
+const KEEPALIVE_MAX: usize = 3;
+
+/// No `inactivity_timeout`: an idle shell (nothing typed, nothing printed) is
+/// normal and must stay open. Dead connections are detected by keepalives
+/// instead. `connect_timeout` only bounds connecting and authenticating.
+fn build_config() -> client::Config {
     client::Config {
-        inactivity_timeout: Some(options.connect_timeout),
+        inactivity_timeout: None,
+        keepalive_interval: Some(KEEPALIVE_INTERVAL),
+        keepalive_max: KEEPALIVE_MAX,
         nodelay: true,
         ..Default::default()
     }
@@ -300,7 +313,7 @@ pub async fn connect(
         return Err(SshError::Connect("no targets given".into()));
     };
 
-    let config = Arc::new(build_config(&options));
+    let config = Arc::new(build_config());
     let forwards: ForwardRegistry = Arc::new(TokioMutex::new(HashMap::new()));
     let mut accepted = Vec::new();
 
