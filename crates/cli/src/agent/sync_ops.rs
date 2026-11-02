@@ -235,8 +235,13 @@ async fn account_logout(state: &Arc<State>) -> RpcResult {
     let Some(session) = SyncSession::load(vault).map_err(sync_err)? else {
         return Err(err(rpc::INVALID_PARAMS, "not signed in to a sync server"));
     };
-    sync::logout(vault, &session).await.map_err(sync_err)?;
-    Ok(json!({}))
+    // Signed out locally either way; the server error only means its copy of
+    // the session may linger (it can be revoked from another device).
+    let server_err = sync::logout(vault, &session).await.map_err(sync_err)?;
+    if let Some(e) = &server_err {
+        tracing::warn!(error = %e, "signed out locally; the server did not confirm");
+    }
+    Ok(json!({ "server_signed_out": server_err.is_none() }))
 }
 
 async fn account_status(state: &Arc<State>) -> RpcResult {

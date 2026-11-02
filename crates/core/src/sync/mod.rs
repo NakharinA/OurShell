@@ -514,14 +514,20 @@ fn resolve_conflict(
     Ok(())
 }
 
-/// Ends this device's session on the server and forgets it locally. The
-/// vault's items (and its `local_only` flag) are left untouched: signing
+/// Forgets this device's session locally and asks the server to end it.
+/// The vault's items (and its `local_only` flag) are left untouched: signing
 /// back in later resumes sync.
-pub async fn logout(vault: &mut Vault, session: &SyncSession) -> Result<()> {
+///
+/// The local session is always cleared, even when the server can't be
+/// reached or no longer knows the session (e.g. its database was cleared):
+/// otherwise the device would stay signed in to a server that rejects it,
+/// with no way to sign out. Returns the server's error, if any, so callers
+/// can mention that the server-side session may still exist.
+pub async fn logout(vault: &mut Vault, session: &SyncSession) -> Result<Option<SyncError>> {
     let client = SyncClient::new(session.server_url.clone());
-    client.logout(&session.session_token).await?;
+    let server = client.logout(&session.session_token).await;
     SyncSession::clear(vault)?;
-    Ok(())
+    Ok(server.err())
 }
 
 pub async fn devices(session: &SyncSession) -> Result<Vec<DeviceInfo>> {
@@ -903,4 +909,47 @@ pub async fn org_users(session: &SyncSession) -> Result<Vec<OrgUserInfo>> {
 pub async fn disable_user(session: &SyncSession, user_id: &str) -> Result<()> {
     let client = SyncClient::new(session.server_url.clone());
     client.disable_user(&session.session_token, user_id).await
+}
+
+#[cfg(test)]
+mod logout_tests {
+    use super::*;
+    use crate::crypto::kdf::KdfParams;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn logout_forgets_session_when_server_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut vault = Vault::create_with_kdf(
+            &dir.path().join("v.db"),
+            "pw",
+            true,
+            KdfParams::insecure_for_tests(),
+        )
+        .unwrap()
+        .vault;
+        // Port 9 on loopback: nothing listens, so the server call fails.
+        let session = SyncSession {
+            server_url: "http://127.0.0.1:9".to_string(),
+            email: "a@example.com".to_string(),
+            device_id: "device".to_string(),
+            device_secret: [7; 32],
+            session_token: "gone".to_string(),
+            cursors: HashMap::new(),
+            last_sync: None,
+        };
+        session.save(&mut vault).unwrap();
+        assert!(SyncSession::load(&vault).unwrap().is_some());
+
+        let server_err = logout(&mut vault, &session).await.unwrap();
+
+        assert!(
+            server_err.is_some(),
+            "the unreachable server should be reported"
+        );
+        assert!(
+            SyncSession::load(&vault).unwrap().is_none(),
+            "local session must be cleared"
+        );
+    }
 }
