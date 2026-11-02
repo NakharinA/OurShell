@@ -64,6 +64,44 @@ The CLI starts a local agent (`ourshell agent`) on demand. It holds the unlocked
 vault, auto-locks after 15 idle minutes, and exits when idle and locked. The
 desktop app and the MCP server talk to the same agent.
 
+## Connect an AI client (MCP)
+
+`ourshell-mcp` is a stdio MCP server that lets an AI client run commands on hosts
+you opt in, with each call approved in the desktop app (**MCP & AI → AI Access**)
+or via `ourshell ai`.
+
+```sh
+cargo install --path crates/mcp                       # installs `ourshell-mcp` to ~/.cargo/bin
+ourshell host edit web --ai-allowed true --ai-user ai # no host is visible to AI until opted in
+```
+
+**Claude Code:**
+
+```sh
+claude mcp add ourshell -- "$HOME/.cargo/bin/ourshell-mcp"
+```
+
+Run `/mcp` inside Claude Code to check the connection. A `CONNECTION_CLOSED`
+status usually means `ourshell-mcp` isn't on the `PATH` Claude Code sees; use the
+full path as above.
+
+**Claude Desktop:** add this to `claude_desktop_config.json`
+(macOS: `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`,
+Linux: `~/.config/Claude/`) and restart the app:
+
+```json
+{
+  "mcpServers": {
+    "ourshell": { "command": "/Users/you/.cargo/bin/ourshell-mcp" }
+  }
+}
+```
+
+Leave `OURSHELL_AGENT_SOCKET` unset so the MCP server and the desktop app share
+one agent and approvals show up in the app. See
+[`docs/mcp-setup.md`](docs/mcp-setup.md) for approvals, dangerous mode and
+troubleshooting.
+
 ## Self-host the sync server
 
 On a Linux server, a Synology NAS or a Mac with Docker:
