@@ -15,11 +15,20 @@
   let tab: "generate" | "import" = "generate";
   let lastOpen = false;
 
-  $: if (state && !lastOpen) {
-    tab = state.kind ?? "generate";
-    reset();
+  // Reset the form each time the modal opens. The open/closed edge is tracked
+  // inside a function: as two `$:` statements, Svelte would run
+  // `lastOpen = !!state` first (it sorts by dependency), so the reset never
+  // fired and the previous key's public-key view came back on reopen.
+  $: onStateChange(state);
+
+  function onStateChange(s: typeof state): void {
+    const open = !!s;
+    if (s && !lastOpen) {
+      tab = s.kind ?? "generate";
+      reset();
+    }
+    lastOpen = open;
   }
-  $: lastOpen = !!state;
 
   // generate form
   let genName = "";
