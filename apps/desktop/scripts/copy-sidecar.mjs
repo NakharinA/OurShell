@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// Copies the built `ourshell` binary (the CLI + local agent, see crates/cli) into
-// `src-tauri/binaries/ourshell-<target-triple>(.exe)`, the layout Tauri's
+// Copies the built `ourshell` binary (the CLI + local agent, see crates/cli) and
+// the `ourshell-mcp` MCP server (see crates/mcp) into
+// `src-tauri/binaries/<name>-<target-triple>(.exe)`, the layout Tauri's
 // `externalBin` sidecar mechanism requires (see tauri.conf.json's
-// `bundle.externalBin: ["binaries/ourshell"]`).
+// `bundle.externalBin`). Bundled side by side, `ourshell-mcp` finds the agent
+// binary as its sibling.
 //
 // Usage:
 //   node scripts/copy-sidecar.mjs            # copies target/debug build
@@ -10,7 +12,7 @@
 //   node scripts/copy-sidecar.mjs --release --target aarch64-pc-windows-msvc
 //                                            # copies target/<triple>/release (cross build)
 //
-// Run this after `cargo build [--release] -p ourshell` and before
+// Run this after `cargo build [--release] -p ourshell -p ourshell-mcp` and before
 // `npm run tauri dev` / `npx tauri build`, since Tauri needs the sidecar file to
 // exist on disk at build/dev time (see README.md).
 
@@ -38,31 +40,37 @@ function hostTriple() {
   return line.slice("host: ".length).trim();
 }
 
+const BINARIES = ["ourshell", "ourshell-mcp"];
+
 function main() {
   const host = hostTriple();
   const triple = requestedTarget || host;
   const exe = triple.includes("windows") ? ".exe" : "";
   // `cargo build --target X` writes to target/X/<profile>, even when X is the host.
-  const src = requestedTarget
-    ? join(repoRoot, "target", triple, profile, `ourshell${exe}`)
-    : join(repoRoot, "target", profile, `ourshell${exe}`);
-  if (!existsSync(src)) {
+  const outDir = requestedTarget
+    ? join(repoRoot, "target", triple, profile)
+    : join(repoRoot, "target", profile);
+  const missing = BINARIES.map((b) => join(outDir, `${b}${exe}`)).filter((p) => !existsSync(p));
+  if (missing.length > 0) {
     console.error(
-      `error: ${src} does not exist.\n` +
+      `error: ${missing.join(", ")} does not exist.\n` +
         `Build it first, e.g.: cargo build ${release ? "--release " : ""}` +
-        `${requestedTarget ? `--target ${requestedTarget} ` : ""}-p ourshell`
+        `${requestedTarget ? `--target ${requestedTarget} ` : ""}-p ourshell -p ourshell-mcp`
     );
     process.exit(1);
   }
 
   const binariesDir = join(desktopDir, "src-tauri", "binaries");
   mkdirSync(binariesDir, { recursive: true });
-  const dest = join(binariesDir, `ourshell-${triple}${exe}`);
-  copyFileSync(src, dest);
-  if (!triple.includes("windows")) {
-    chmodSync(dest, 0o755);
+  for (const name of BINARIES) {
+    const src = join(outDir, `${name}${exe}`);
+    const dest = join(binariesDir, `${name}-${triple}${exe}`);
+    copyFileSync(src, dest);
+    if (!triple.includes("windows")) {
+      chmodSync(dest, 0o755);
+    }
+    console.log(`copied ${src} -> ${dest}`);
   }
-  console.log(`copied ${src} -> ${dest}`);
 }
 
 main();

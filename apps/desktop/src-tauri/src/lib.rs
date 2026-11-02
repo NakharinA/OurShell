@@ -35,7 +35,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::rpc_call,
             commands::agent_status,
-            commands::check_latest_release
+            commands::check_latest_release,
+            commands::mcp_server_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running the OurShell desktop app");

@@ -4,6 +4,7 @@
 <script lang="ts">
   import { confirmDialog } from "../../stores/confirm";
   import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import Icon from "../../icons/Icon.svelte";
   import Menu from "../ui/Menu.svelte";
   import { t, format } from "../../i18n";
@@ -38,7 +39,15 @@
   }
 
   $: if (tab === "activity") void loadAudit();
-  onMount(() => void refreshHosts());
+  // Full path of the `ourshell-mcp` bundled with the app (see the Rust command
+  // `mcp_server_path`); null means "not bundled here", so fall back to PATH.
+  let mcpPath: string | null = null;
+  onMount(() => {
+    void refreshHosts();
+    invoke<string | null>("mcp_server_path")
+      .then((p) => (mcpPath = p))
+      .catch(() => (mcpPath = null));
+  });
 
   async function decide(approvalId: string, approve: boolean): Promise<void> {
     busy = true;
@@ -110,7 +119,9 @@
     void navigator.clipboard.writeText(text).then(() => toast.success($t("toast.copied")));
   }
 
-  const clientJson = `{\n  "mcpServers": {\n    "ourshell": { "command": "ourshell-mcp" }\n  }\n}`;
+  $: mcpCommand = mcpPath ?? "ourshell-mcp";
+  $: claudeCodeCmd = `claude mcp add ourshell -- ${/\s/.test(mcpCommand) ? `"${mcpCommand}"` : mcpCommand}`;
+  $: clientJson = `{\n  "mcpServers": {\n    "ourshell": { "command": ${JSON.stringify(mcpCommand)} }\n  }\n}`;
 </script>
 
 <section class="view">
@@ -176,8 +187,8 @@
       <div class="field">
         <span class="lbl">{$t("ai.claudeCode")}</span>
         <div class="code-wrap">
-          <pre class="code">claude mcp add ourshell -- ourshell-mcp</pre>
-          <button class="btn btn-soft btn-sm copy-btn" on:click={() => copy("claude mcp add ourshell -- ourshell-mcp")}>
+          <pre class="code">{claudeCodeCmd}</pre>
+          <button class="btn btn-soft btn-sm copy-btn" on:click={() => copy(claudeCodeCmd)}>
             <Icon name="copy" /><span>{$t("a.copy")}</span>
           </button>
         </div>

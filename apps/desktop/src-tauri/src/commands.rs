@@ -107,3 +107,26 @@ pub async fn check_latest_release() -> Result<FallbackUpdateCheck, String> {
         notes: release.body,
     })
 }
+
+/// Absolute path of the `ourshell-mcp` server bundled with the app, for the
+/// "MCP & AI" view's copy-paste setup commands.
+///
+/// Tauri installs `externalBin` sidecars next to the app's own executable
+/// (`OurShell.app/Contents/MacOS` on macOS, the install directory on Windows,
+/// `/usr/bin` for `.deb`/`.rpm`). Returns `None` when the binary isn't there, or
+/// when running as an AppImage, whose mount point (`/tmp/.mount_*`) changes on
+/// every launch and so can't be pasted into an AI client's config; the view then
+/// falls back to a bare `ourshell-mcp` looked up on `PATH`.
+#[tauri::command]
+pub fn mcp_server_path() -> Option<String> {
+    if std::env::var_os("APPIMAGE").is_some() {
+        return None;
+    }
+    let name = if cfg!(windows) {
+        "ourshell-mcp.exe"
+    } else {
+        "ourshell-mcp"
+    };
+    let path = std::env::current_exe().ok()?.parent()?.join(name);
+    path.is_file().then(|| path.to_string_lossy().into_owned())
+}

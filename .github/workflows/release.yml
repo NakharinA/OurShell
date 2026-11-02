@@ -224,7 +224,7 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
-      # The agent sidecar is built for the same target by the app's
+      # The agent and MCP server sidecars are built for the same target by the app's
       # beforeBuildCommand (scripts/prepare-sidecar.mjs, using TAURI_ENV_TARGET_TRIPLE).
       - uses: tauri-apps/tauri-action@v1
         env:

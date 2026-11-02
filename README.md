@@ -70,6 +70,12 @@ desktop app and the MCP server talk to the same agent.
 you opt in, with each call approved in the desktop app (**MCP & AI → AI Access**)
 or via `ourshell ai`.
 
+The desktop app ships `ourshell-mcp` alongside itself, and its **MCP & AI → AI
+Access** tab shows ready-to-copy setup commands with the bundled binary's full
+path. (The AppImage is the exception: its mount path changes on every launch, so
+install the CLI + MCP archive instead.) Without the desktop app, install it on its
+own:
+
 ```sh
 cargo install --path crates/mcp                       # installs `ourshell-mcp` to ~/.cargo/bin
 ourshell host edit web --ai-allowed true --ai-user ai # no host is visible to AI until opted in

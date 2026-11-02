@@ -67,13 +67,14 @@ jobs:
       - name: vitest
         run: npm run test
 
-      # The agent binary (`ourshell agent`) is built by the root workspace and
-      # copied in as the Tauri sidecar; see apps/desktop/README.md.
-      - name: Build the ourshell CLI/agent binary
+      # The agent binary (`ourshell agent`) and the MCP server (`ourshell-mcp`) are
+      # built by the root workspace and copied in as Tauri sidecars; see
+      # apps/desktop/README.md.
+      - name: Build the ourshell CLI/agent and MCP server binaries
         working-directory: .
-        run: cargo build --release -p ourshell
+        run: cargo build --release -p ourshell -p ourshell-mcp
 
-      - name: Copy sidecar binary
+      - name: Copy sidecar binaries
         run: node scripts/copy-sidecar.mjs --release
 
       # tauri-build checks that the sidecar exists, so this must run after the copy.
