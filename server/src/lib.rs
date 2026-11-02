@@ -7,6 +7,7 @@
 //! `totp.secret` to protect stolen backups (`SERVER_MASTER_KEY`).
 
 pub mod auth;
+pub mod backup;
 pub mod config;
 pub mod crypto;
 pub mod db;
@@ -41,26 +42,31 @@ pub async fn build_state(config: Config) -> Result<AppState> {
         .connect(&config.database_url)
         .await
         .context("failed to connect to DATABASE_URL")?;
-    // Runtime migration loading (reads `migrations/*.sql` off disk at
-    // startup) rather than the `sqlx::migrate!` compile-time macro -- see
-    // `src/sqlx.rs` for why this crate avoids the `sqlx` facade's "macros"
-    // feature entirely.
-    //
-    // `MIGRATIONS_DIR` overrides the location (the Docker image sets it to
-    // where the Dockerfile copied `server/migrations/`, since the
-    // `CARGO_MANIFEST_DIR` default below is a build-time path that only
-    // exists on the machine that compiled the binary).
-    let migrations_dir = std::env::var("MIGRATIONS_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations"));
-    let migrator = Migrator::new(migrations_dir.as_path())
-        .await
-        .context("failed to load migrations directory")?;
-    migrator
+    migrator()
+        .await?
         .run(&pool)
         .await
         .context("failed to run database migrations")?;
     AppState::new(pool, config).await
+}
+
+/// This server's database migrations.
+///
+/// Runtime migration loading (reads `migrations/*.sql` off disk at startup)
+/// rather than the `sqlx::migrate!` compile-time macro -- see `src/sqlx.rs`
+/// for why this crate avoids the `sqlx` facade's "macros" feature entirely.
+///
+/// `MIGRATIONS_DIR` overrides the location (the Docker image sets it to
+/// where the Dockerfile copied `server/migrations/`, since the
+/// `CARGO_MANIFEST_DIR` default below is a build-time path that only exists
+/// on the machine that compiled the binary).
+pub async fn migrator() -> Result<Migrator> {
+    let migrations_dir = std::env::var("MIGRATIONS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations"));
+    Migrator::new(migrations_dir.as_path())
+        .await
+        .context("failed to load migrations directory")
 }
 
 /// Serves until the process is stopped. Starts in setup mode (the `/setup`
@@ -99,14 +105,19 @@ pub async fn run() -> Result<()> {
 
     let reload = web::Reload::default();
     let sessions = std::sync::Arc::new(web::admin::Sessions::default());
+    let backups = backup::Backups::new(data_dir.clone());
     loop {
         let effective = settings::load(&data_dir)?;
         let changed = reload.subscribe();
         let config = Config::from_effective(&effective)?;
         let wanted_tls = tls::wanted(config.as_ref());
+        // The backup schedule, per generation like the TLS tasks below;
+        // dropping it on reload stops it.
+        let mut backup_schedule = None;
         let app = match config {
             Some(config) => {
                 let state = build_state(config).await?;
+                backup_schedule = Some(backups.start(state.pool().clone()));
                 routes::build_router(state.clone()).merge(web::admin::router(
                     web::admin::AdminCtx {
                         state,
@@ -115,6 +126,7 @@ pub async fn run() -> Result<()> {
                         reload: reload.clone(),
                         env_locked: std::sync::Arc::new(effective.env_locked.clone()),
                         tls_status: tls_status.clone(),
+                        backups: backups.clone(),
                     },
                 ))
             }
@@ -166,6 +178,7 @@ pub async fn run() -> Result<()> {
             None => http.await?,
         }
         drop(tls_gen);
+        drop(backup_schedule);
         tracing::info!("configuration changed; reloading");
     }
 }

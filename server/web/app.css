@@ -109,7 +109,7 @@ input.code { font-family: var(--mono); letter-spacing: 0.08em; text-transform: u
 .choice label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .choice input { margin-top: 4px; accent-color: var(--accent); }
 .choice b { display: block; font-size: 14px; }
-.choice small { color: var(--text-3); font-size: 12.5px; }
+.choice small, .check small { color: var(--text-3); font-size: 12.5px; }
 .check { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; cursor: pointer; }
 .check input { accent-color: var(--accent); width: 16px; height: 16px; }
 

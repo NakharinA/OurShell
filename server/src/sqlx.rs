@@ -21,4 +21,5 @@ pub use sqlx_core::error::{DatabaseError, Error, Result};
 pub use sqlx_core::migrate;
 pub use sqlx_core::query::query;
 pub use sqlx_core::query_as::query_as;
+pub use sqlx_core::sql_str::AssertSqlSafe;
 pub use sqlx_postgres::{PgPool, PgPoolOptions};

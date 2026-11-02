@@ -33,6 +33,8 @@ use crate::sqlx;
 use crate::state::AppState;
 use crate::tls::{TlsStatus, ViaTls};
 
+mod backup;
+
 const COOKIE: &str = "ourshell_admin";
 const SESSION_TTL: Duration = Duration::from_secs(12 * 3600);
 const CSRF_HEADER: &str = "x-ourshell-admin";
@@ -80,6 +82,8 @@ pub struct AdminCtx {
     pub env_locked: Arc<Vec<&'static str>>,
     /// State of the built-in HTTPS listener, for the status card.
     pub tls_status: Arc<TlsStatus>,
+    /// Scheduled backups (shared across reloads), for the Backups tab.
+    pub backups: Arc<crate::backup::Backups>,
 }
 
 pub fn router(ctx: AdminCtx) -> Router {
@@ -99,7 +103,8 @@ pub fn router(ctx: AdminCtx) -> Router {
         .route("/users", get(users))
         .route("/users/{user_id}/disable", post(disable_user))
         .route("/users/{user_id}/enable", post(enable_user))
-        .route("/invites", get(invites).post(create_invite));
+        .route("/invites", get(invites).post(create_invite))
+        .merge(backup::routes());
     Router::new()
         .route("/", get(|| async { Redirect::to("/admin") }))
         .route("/setup", get(|| async { Redirect::to("/admin") }))

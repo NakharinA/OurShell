@@ -220,6 +220,7 @@ async fn admin_page() {
         reload,
         env_locked: Arc::new(vec!["rate_limit_per_min"]),
         tls_status: Arc::new(Default::default()),
+        backups: ourshell_server::backup::Backups::new(dir.to_path_buf()),
     });
 
     // Signed out, and the CSRF header is required.
@@ -487,6 +488,7 @@ fn admin_router(
         reload: Reload::default(),
         env_locked: Arc::new(env_locked),
         tls_status: Arc::new(Default::default()),
+        backups: ourshell_server::backup::Backups::new(dir.to_path_buf()),
     })
 }
 

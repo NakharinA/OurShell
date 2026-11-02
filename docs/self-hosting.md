@@ -130,7 +130,8 @@ issue an invite). Every signup after that follows the normal policy.
 `http://<server>:8443/admin`, signed in with the admin password, lets you
 change the address, sign-up policy, device limit, OIDC and TLS settings
 (including "Behind a reverse proxy or ingress" and its trusted proxies),
-list users (disable/enable them), create invite codes, and change the admin
+list users (disable/enable them), create invite codes, set up encrypted
+backups to S3 (see [Backups](#backups)), and change the admin
 password. Settings that come from environment variables are shown
 read-only. Forgot the password? Set a new one with
 `docker exec -it ourshell-server ourshell-server set-admin-password`, then
@@ -164,7 +165,9 @@ over `DATABASE_URL` for an existing database -- with a throwaway
 `/data/config.toml` out of the server container. **Keep both**: the dump
 alone can't be restored without the master key in `config.toml`. To copy
 it by hand: `docker cp ourshell-server:/data/config.toml .`. On Windows,
-run `backup.sh` from Git Bash or WSL. See "Backups" below for restoring.
+run `backup.sh` from Git Bash or WSL. See "Backups" below for restoring,
+and for the server's built-in, encrypted, scheduled backups to S3-compatible
+storage (no script or cron job needed).
 
 ### The Docker image
 
@@ -325,6 +328,7 @@ wizard instead of the API.
 | `OURSHELL_TLS_EMAIL` | no | unset | contact email for the Let's Encrypt account |
 | `OURSHELL_TLS_BIND` | no | `0.0.0.0:8444` | where the built-in HTTPS listener binds |
 | `OURSHELL_ACME_STAGING` | no | `false` | `1`/`true`/`yes`/`on` = Let's Encrypt staging (untrusted test certificates) |
+| `OURSHELL_BACKUP_*` | no | off | encrypted backups to S3, see [Automatic encrypted backups to S3](#automatic-encrypted-backups-to-s3) |
 
 ### Generating `SERVER_MASTER_KEY`
 
@@ -847,6 +851,125 @@ for exact request/response shapes). Authenticated endpoints take
 | `GET /oidc/start` / `GET /oidc/callback` | none | 501 unless `OIDC_*` is configured |
 
 ## Backups
+
+Two options, which can be combined:
+
+- **Automatic encrypted backups to S3** (below): built into the server,
+  set up on the admin page, nothing to schedule.
+- **`backup.sh`** (further below): a manual `pg_dump` + `config.toml` copy
+  to the local disk, for scripted or one-off backups.
+
+### Automatic encrypted backups to S3
+
+The server can back itself up to any S3-compatible object storage: AWS S3,
+Cloudflare R2, Backblaze B2, Wasabi, MinIO, Synology C2 Object Storage and
+most self-hosted stores. Open **/admin → Backups**, fill in the storage
+details and a backup passphrase, click **Test connection**, tick **Back up
+automatically** and save. **Back up now** makes one immediately.
+
+| Provider | Endpoint URL | Region | Path-style |
+| --- | --- | --- | --- |
+| AWS S3 | empty | the bucket's region, e.g. `eu-central-1` | off |
+| Cloudflare R2 | `https://<account-id>.r2.cloudflarestorage.com` | `auto` | off |
+| Backblaze B2 | `https://s3.<region>.backblazeb2.com` | e.g. `us-west-004` | off |
+| Wasabi | `https://s3.<region>.wasabisys.com` | e.g. `eu-central-1` | off |
+| MinIO / self-hosted | e.g. `http://nas.local:9000` | `us-east-1` unless configured | **on** |
+| Synology C2 Object Storage | the endpoint shown in C2 (e.g. `https://eu-002.s3.synologyc2.net`) | the region shown in C2 | **on** |
+
+Create a dedicated bucket (or a folder via the key prefix) and an access key
+that can list, read, write and delete objects in it. Then:
+
+- **What a backup is**: one file, `<prefix>ourshell-backup-<UTC
+  yyyymmddThhmmssZ>.osbk`, holding every table of the database (Postgres
+  `COPY`, CSV), the server's effective configuration (`config.toml` plus any
+  environment overrides, *including the master key*, so this one file
+  restores everything) and a manifest (format, server version, time,
+  database migration versions, row counts). It is gzip-compressed and then
+  encrypted with XChaCha20-Poly1305 under a key derived from your backup
+  passphrase with Argon2id; only a small header (format marker, salt,
+  Argon2 parameters, nonce) is readable without the passphrase.
+- **The passphrase is everything.** Store it in a password manager or
+  somewhere else away from the server. **If you lose it, the backups are
+  useless**: nobody, including the OurShell developers, can decrypt them.
+  Changing it later only affects new backups; keep the old one for older
+  files.
+- **Schedule**: the first check runs about 2 minutes after the server
+  starts (or the settings are saved), then every *Check every (hours)*
+  (default 24). A check compares a SHA-256 of the data with the last
+  uploaded backup and **uploads nothing when nothing changed** (shown as
+  "unchanged — skipped"). Sign-in churn doesn't count as a change: rows in
+  `sessions`, `events` (the audit log) and short-lived protocol tables are
+  still included in each backup, but alone they don't trigger a new one.
+  **Back up now** always uploads.
+- **Retention**: after each upload, all but the newest *Backups to keep*
+  (default 30, `0` = keep all) `ourshell-backup-*.osbk` files under the
+  prefix are deleted. Other objects in the bucket are never touched.
+- **Status** (last backup, last check and its result, last error, next
+  check) is on the Backups tab and in `backup-state.json` in the data
+  directory.
+
+All settings can also come from the environment (they then show read-only
+on the admin page):
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `OURSHELL_BACKUP_ENABLED` | `false` | scheduled backups on/off |
+| `OURSHELL_BACKUP_S3_ENDPOINT` | AWS S3 | `https://...` or `http://...` |
+| `OURSHELL_BACKUP_S3_REGION` | `us-east-1` | |
+| `OURSHELL_BACKUP_S3_BUCKET` | - | |
+| `OURSHELL_BACKUP_S3_PREFIX` | empty | "folder" in the bucket, e.g. `ourshell/` |
+| `OURSHELL_BACKUP_S3_ACCESS_KEY_ID` / `OURSHELL_BACKUP_S3_SECRET_ACCESS_KEY` | - | |
+| `OURSHELL_BACKUP_S3_PATH_STYLE` | `false` | `true` for MinIO, Synology C2 and most self-hosted stores |
+| `OURSHELL_BACKUP_PASSPHRASE` | - | at least 12 characters |
+| `OURSHELL_BACKUP_INTERVAL_HOURS` | `24` | |
+| `OURSHELL_BACKUP_KEEP` | `30` | `0` = keep all; `backup.sh` reads the same variable for its local copies |
+
+#### Restoring an S3 backup
+
+`ourshell-server restore` decrypts a backup, checks it, migrates the target
+database to this server's version and replaces **all** its data with the
+backup's in one transaction, then writes the backup's `config.toml` into the
+data directory (the previous one is kept as
+`config.toml.before-restore-<stamp>`; keys your environment sets are left
+out of the file, since the environment wins anyway). It refuses a backup
+made by a newer server version; upgrade first. Backups from older versions
+restore fine.
+
+```sh
+# Straight from the bucket (uses the S3 settings from config.toml or the
+# OURSHELL_BACKUP_S3_* variables); `s3:latest` picks the newest file.
+docker exec -it ourshell-server ourshell-server restore s3:latest --dry-run   # decrypt + show the manifest only
+docker exec -it ourshell-server ourshell-server restore s3:latest
+docker restart ourshell-server
+
+# Or from a downloaded file:
+docker cp ourshell-backup-20261101T020000Z.osbk ourshell-server:/tmp/
+docker exec -it ourshell-server ourshell-server restore /tmp/ourshell-backup-20261101T020000Z.osbk
+docker restart ourshell-server
+```
+
+The passphrase comes from `OURSHELL_BACKUP_PASSPHRASE` / the `[backup]`
+settings, or is asked for. The database is the one in `DATABASE_URL` if set,
+otherwise the one in the backup's configuration. If `SERVER_MASTER_KEY` is
+set in the environment it must match the backup's (restore stops otherwise:
+the data couldn't be decrypted). `s3:KEY` takes a key as listed on the
+Backups tab (with or without the prefix).
+
+On a brand-new machine: install the server as usual (the installer or the
+compose file), then before or instead of finishing the setup wizard run the
+restore command above with the storage settings passed as environment
+variables (`docker exec -e OURSHELL_BACKUP_S3_BUCKET=... -e ...`), or with a
+downloaded file, and restart.
+
+**Downloading a backup by hand**: every provider's web console can download
+an object: open the bucket (AWS S3 console, Cloudflare dashboard → R2,
+Backblaze → Buckets → Browse files, Wasabi console, the MinIO console,
+Synology C2 Object Storage → Buckets), browse to the prefix and download the
+`ourshell-backup-<stamp>.osbk` you want. Any S3 tool works too, e.g.
+`aws s3 cp s3://<bucket>/<prefix>ourshell-backup-<stamp>.osbk . --endpoint-url <endpoint>`
+or `rclone copy`.
+
+### Manual backups with backup.sh
 
 ```sh
 ./backup.sh                    # in an installer-made install dir

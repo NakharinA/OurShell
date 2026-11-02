@@ -6,6 +6,7 @@ const views = {
   users: loadUsers,
   invites: loadInvites,
   settings: loadSettings,
+  backups: loadBackups,
 };
 
 function showApp(signedIn) {
@@ -238,6 +239,151 @@ $("#password").addEventListener("submit", async (e) => {
     setTimeout(() => showApp(false), 1500);
   } catch (err) {
     note(msg, "err", err.message);
+  }
+});
+
+// ---- Backups ----
+
+function fmtSize(n) {
+  if (n === null || n === undefined) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+const fmtTime = (t) => (t ? new Date(t).toLocaleString() : "");
+
+function showBackupStatus(st) {
+  $("#b-enabled").textContent = st.running ? "On (a backup is running now)" : st.enabled ? "On" : "Off";
+  $("#b-last").textContent = st.last_success_at
+    ? `${fmtTime(st.last_success_at)} · ${fmtSize(st.last_size)} · ${st.last_key}`
+    : "Never";
+  const result = { uploaded: "uploaded", unchanged: "unchanged — skipped", failed: "failed" }[st.last_result] || "";
+  $("#b-check").textContent = st.last_check_at ? `${fmtTime(st.last_check_at)}${result ? ` (${result})` : ""}` : "Never";
+  $("#b-next").textContent = st.next_check ? fmtTime(st.next_check) : st.enabled ? "" : "Not scheduled";
+  $("#b-error").textContent = st.last_error && st.last_result === "failed"
+    ? `${fmtTime(st.last_error_at)}: ${st.last_error}`
+    : "None";
+}
+
+async function loadBackups() {
+  const { settings: s, env_locked, status, min_passphrase_len } = await api("/admin/api/backup");
+  const form = $("#backup");
+  for (const input of $$("input", form)) {
+    const v = s[input.name];
+    if (input.type === "checkbox") input.checked = !!v;
+    else if (input.type !== "password") input.value = v ?? "";
+    else input.value = "";
+  }
+  form.elements.passphrase.minLength = min_passphrase_len;
+  $("#backup-secret-hint").textContent = s.secret_access_key_set ? "Saved. Leave empty to keep it." : "";
+  $("#backup-pass-hint").textContent = s.passphrase_set
+    ? "Saved. Leave empty to keep it."
+    : `At least ${min_passphrase_len} characters.`;
+  for (const wrap of $$("[data-key]", form)) {
+    const locked = env_locked.includes(wrap.dataset.key);
+    for (const input of $$("input", wrap)) input.disabled = locked;
+    if (locked && !$(".locked", wrap)) {
+      (wrap.querySelector("span") || wrap).append(el("span", { class: "locked" }, " · set by environment"));
+    }
+  }
+  showBackupStatus(status);
+  await loadBackupList();
+}
+
+async function loadBackupList() {
+  const body = $("#backup-list");
+  const msg = $("#backup-list-msg");
+  body.replaceChildren();
+  note(msg, "", "");
+  let res;
+  try {
+    res = await api("/admin/api/backup/list");
+  } catch (err) {
+    if (err.code === "incomplete_backup_settings") {
+      body.append(el("tr", {}, el("td", { colspan: 3, class: "empty" }, "Set up the storage above first.")));
+    } else {
+      note(msg, "err", err.message);
+    }
+    return;
+  }
+  if (!res.backups.length) {
+    body.append(el("tr", {}, el("td", { colspan: 3, class: "empty" }, "No backups yet.")));
+    return;
+  }
+  for (const b of res.backups) {
+    body.append(
+      el(
+        "tr",
+        {},
+        el("td", { class: "mono" }, b.key),
+        el("td", {}, fmtSize(b.size)),
+        el("td", {}, fmtTime(b.last_modified)),
+      ),
+    );
+  }
+}
+
+function backupForm() {
+  const f = $("#backup").elements;
+  const num = (name) => Number(f[name].value || 0);
+  return {
+    enabled: f.enabled.checked,
+    endpoint: f.endpoint.value.trim() || null,
+    region: f.region.value.trim() || null,
+    bucket: f.bucket.value.trim() || null,
+    prefix: f.prefix.value.trim() || null,
+    access_key_id: f.access_key_id.value.trim() || null,
+    secret_access_key: f.secret_access_key.value || null,
+    path_style: f.path_style.checked,
+    passphrase: f.passphrase.value || null,
+    interval_hours: num("interval_hours"),
+    keep: num("keep"),
+  };
+}
+
+$("#backup-test").addEventListener("click", async (e) => {
+  const msg = $("#backup-msg");
+  try {
+    const r = await busy(e.currentTarget, () => api("/admin/api/backup/test", { method: "POST", body: backupForm() }));
+    note(msg, "ok", r.message);
+  } catch (err) {
+    note(msg, "err", err.message);
+  }
+});
+
+$("#backup").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = $("#backup-msg");
+  try {
+    await busy(e.submitter, () => api("/admin/api/backup", { method: "PUT", body: backupForm() }));
+    note(msg, "info", "Saved. Reloading the server…");
+    const ok = await waitForMode("ready");
+    note(msg, ok ? "ok" : "warn", ok ? "Saved. The first check runs in about 2 minutes." : "Saved, but the server hasn't come back yet. Check its log.");
+    await loadBackups();
+  } catch (err) {
+    note(msg, "err", err.message);
+  }
+});
+
+$("#backup-run").addEventListener("click", async (e) => {
+  const msg = $("#backup-run-msg");
+  note(msg, "info", "Backing up…");
+  try {
+    const r = await busy(e.currentTarget, () => api("/admin/api/backup/run", { method: "POST" }));
+    const o = r.outcome;
+    note(
+      msg,
+      "ok",
+      o.result === "uploaded"
+        ? `Uploaded ${o.key} (${fmtSize(o.size)})${o.deleted.length ? `; removed ${o.deleted.length} old backup(s)` : ""}.`
+        : "Nothing changed since the last backup.",
+    );
+    showBackupStatus(r.status);
+    await loadBackupList();
+  } catch (err) {
+    note(msg, "err", err.message);
+    api("/admin/api/backup").then((r) => showBackupStatus(r.status), () => {});
   }
 });
 
