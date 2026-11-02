@@ -78,7 +78,7 @@ base32 = "0.5"
 
 # Optional OIDC sign-in. rustls-tls (the default feature) uses `ring`.
 openidconnect = { version = "4", optional = true }
-toml = { version = "0.9", default-features = false, features = ["serde", "parse", "display"] }
+toml = { version = "1.1", default-features = false, features = ["serde", "parse", "display"] }
 argon2 = "0.6.0"
 
 # Optional built-in HTTPS with a Let's Encrypt certificate (TLS-ALPN-01),
