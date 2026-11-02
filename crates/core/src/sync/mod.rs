@@ -943,7 +943,13 @@ mod logout_tests {
 
         let server_err = logout(&mut vault, &session).await.unwrap();
 
-        assert!(server_err.is_some(), "the unreachable server should be reported");
-        assert!(SyncSession::load(&vault).unwrap().is_none(), "local session must be cleared");
+        assert!(
+            server_err.is_some(),
+            "the unreachable server should be reported"
+        );
+        assert!(
+            SyncSession::load(&vault).unwrap().is_none(),
+            "local session must be cleared"
+        );
     }
 }
