@@ -45,7 +45,8 @@
       "signingIdentity": "-"
     },
     "externalBin": [
-      "binaries/ourshell"
+      "binaries/ourshell",
+      "binaries/ourshell-mcp"
     ],
     "icon": [
       "icons/32x32.png",
