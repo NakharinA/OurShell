@@ -119,6 +119,33 @@ pub(crate) fn assets<S: Clone + Send + Sync + 'static>() -> Router<S> {
         )
 }
 
+const STARTING_HTML: &str = "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+<meta http-equiv=\"refresh\" content=\"5\"><title>OurShell server starting</title></head>\
+<body style=\"font-family:system-ui,sans-serif;margin:3em\"><p>The OurShell server is starting \
+(waiting for its database). This page reloads by itself.</p></body></html>";
+
+/// Served while the server decides what to serve (see `crate::startup`):
+/// `/v1/health` answers `"mode":"starting"`, pages say so and reload,
+/// everything else is 503.
+pub fn starting_router() -> Router {
+    Router::new()
+        .route(
+            "/v1/health",
+            get(|| async {
+                axum::Json(serde_json::json!({
+                    "status": "ok", "mode": "starting", "version": VERSION
+                }))
+            }),
+        )
+        .fallback(|| async {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [(header::RETRY_AFTER, "5")],
+                page(STARTING_HTML),
+            )
+        })
+}
+
 /// `postgres://user:pass@host:5432/db?x` -> `host:5432/db`, for display.
 pub(crate) fn redact_database_url(url: &str) -> String {
     let rest = url.split_once("://").map_or(url, |(_, r)| r);

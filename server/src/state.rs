@@ -13,7 +13,7 @@ use crate::sqlx::PgPool;
 
 pub type ServerSetup = opaque_ke::ServerSetup<CipherSuite>;
 
-const AAD_SERVER_SETUP: &[u8] = b"ourshell:server-setup:v1";
+pub const AAD_SERVER_SETUP: &[u8] = b"ourshell:server-setup:v1";
 
 #[derive(Clone)]
 pub struct AppState(Arc<Inner>);
@@ -28,7 +28,7 @@ struct Inner {
 
 impl AppState {
     pub async fn new(pool: PgPool, config: Config) -> Result<Self> {
-        let server_setup = load_or_create_server_setup(&pool, &config).await?;
+        let server_setup = load_or_create_server_setup(&pool, &config.server_master_key).await?;
         let rate_limiter =
             RateLimiter::new(config.rate_limit_per_min).with_proxy(config.proxy.clone());
         let oidc = match &config.oidc {
@@ -65,7 +65,12 @@ impl AppState {
     }
 }
 
-async fn load_or_create_server_setup(pool: &PgPool, config: &Config) -> Result<ServerSetup> {
+/// The OPAQUE server setup: `OPAQUE_SERVER_SETUP`, else the encrypted row in
+/// `server_setup`, else a new one (stored encrypted under `master_key`).
+pub async fn load_or_create_server_setup(
+    pool: &PgPool,
+    master_key: &[u8; 32],
+) -> Result<ServerSetup> {
     if let Ok(b64) = std::env::var("OPAQUE_SERVER_SETUP") {
         if !b64.trim().is_empty() {
             let bytes = STANDARD
@@ -81,7 +86,7 @@ async fn load_or_create_server_setup(pool: &PgPool, config: &Config) -> Result<S
             .fetch_optional(pool)
             .await?
     {
-        let plaintext = crate::crypto::decrypt(&config.server_master_key, &row.0, AAD_SERVER_SETUP)
+        let plaintext = crate::crypto::decrypt(master_key, &row.0, AAD_SERVER_SETUP)
             .map_err(|e| anyhow::anyhow!("failed to decrypt stored server_setup: {e}"))?;
         return ServerSetup::deserialize(&plaintext)
             .map_err(|e| anyhow::anyhow!("stored server_setup is malformed: {e}"));
@@ -89,8 +94,7 @@ async fn load_or_create_server_setup(pool: &PgPool, config: &Config) -> Result<S
 
     let setup = ServerSetup::new(&mut rand::rngs::OsRng);
     let serialized = setup.serialize();
-    let encrypted =
-        crate::crypto::encrypt(&config.server_master_key, &serialized, AAD_SERVER_SETUP);
+    let encrypted = crate::crypto::encrypt(master_key, &serialized, AAD_SERVER_SETUP);
     let inserted = sqlx::query(
         "INSERT INTO server_setup (id, encrypted_setup) VALUES (1, $1) ON CONFLICT (id) DO NOTHING",
     )
@@ -106,7 +110,7 @@ async fn load_or_create_server_setup(pool: &PgPool, config: &Config) -> Result<S
     let row: (Vec<u8>,) = sqlx::query_as("SELECT encrypted_setup FROM server_setup WHERE id = 1")
         .fetch_one(pool)
         .await?;
-    let plaintext = crate::crypto::decrypt(&config.server_master_key, &row.0, AAD_SERVER_SETUP)
+    let plaintext = crate::crypto::decrypt(master_key, &row.0, AAD_SERVER_SETUP)
         .map_err(|e| anyhow::anyhow!("failed to decrypt stored server_setup: {e}"))?;
     ServerSetup::deserialize(&plaintext)
         .map_err(|e| anyhow::anyhow!("stored server_setup is malformed: {e}"))

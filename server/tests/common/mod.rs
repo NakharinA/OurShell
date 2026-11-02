@@ -121,6 +121,72 @@ pub async fn setup_with(configure: impl FnOnce(&mut Config)) -> Option<TestApp> 
     })
 }
 
+pub fn base_url() -> String {
+    std::env::var("TEST_DATABASE_URL").unwrap_or_else(|_| DEFAULT_TEST_DATABASE_URL.to_string())
+}
+
+/// A brand-new, empty schema and a database URL that uses it (via the
+/// connection's `search_path`), for tests that need a URL of their own,
+/// like the setup wizard and the startup decision. Drop it with
+/// [`TempSchema::drop`].
+pub struct TempSchema {
+    pub url: String,
+    pub schema: String,
+}
+
+pub async fn temp_schema() -> Option<TempSchema> {
+    let base = base_url();
+    let admin = match PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(3))
+        .connect(&base)
+        .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            println!("skipping: no test Postgres reachable at {base} ({e})");
+            return None;
+        }
+    };
+    let schema = format!("test_{}", Uuid::new_v4().simple());
+    admin
+        .execute(AssertSqlSafe(format!("CREATE SCHEMA \"{schema}\"")))
+        .await
+        .expect("failed to create test schema");
+    admin.close().await;
+    let sep = if base.contains('?') { '&' } else { '?' };
+    Some(TempSchema {
+        url: format!("{base}{sep}options[search_path]={schema}"),
+        schema,
+    })
+}
+
+impl TempSchema {
+    pub async fn pool(&self) -> PgPool {
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&self.url)
+            .await
+            .expect("failed to connect to the test schema")
+    }
+
+    pub async fn drop(self) {
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&base_url())
+            .await
+            .unwrap();
+        admin
+            .execute(AssertSqlSafe(format!(
+                "DROP SCHEMA IF EXISTS \"{}\" CASCADE",
+                self.schema
+            )))
+            .await
+            .unwrap();
+        admin.close().await;
+    }
+}
+
 fn test_config(database_url: String) -> Config {
     let mut server_master_key = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut server_master_key);

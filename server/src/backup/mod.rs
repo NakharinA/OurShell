@@ -1,8 +1,11 @@
 //! Built-in, encrypted, scheduled backups to S3-compatible storage.
 //!
 //! A backup is one `.osbk` file (see [`format`]): every application table
-//! (Postgres `COPY`, see [`dump`]), the effective `config.toml` (which
-//! holds the master key, so one file restores everything) and a manifest,
+//! (Postgres `COPY`, see [`dump`]; this includes the encrypted
+//! `server_settings` row), the effective configuration as TOML (the
+//! master key, the database URL and every setting from the environment,
+//! `config.toml` and the database, so one file restores everything) and a
+//! manifest,
 //! gzip-compressed and encrypted under a key derived from the backup
 //! passphrase. A background task checks every `interval_hours`; when the
 //! content hash (see [`format::Bundle::content_hash`]) hasn't changed since
@@ -25,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use self::format::{Bundle, KdfParams, Manifest, PAYLOAD_FORMAT};
 use self::s3::{Object, S3Client, S3Config};
-use crate::settings::{self, FileBackup};
+use crate::settings::{self, FileBackup, Store};
 use crate::sqlx::PgPool;
 
 pub const STATE_FILE: &str = "backup-state.json";
@@ -101,11 +104,9 @@ impl BackupConfig {
         S3Client::new(self.s3.clone())
     }
 
-    /// Effective settings from `config.toml` + environment in `data_dir`.
-    pub fn load(data_dir: &Path) -> Result<Self> {
-        Ok(Self::from_file(
-            settings::load(data_dir)?.values.backup.as_ref(),
-        ))
+    /// Effective settings: environment > `config.toml` > database.
+    pub async fn load(store: &Store) -> Result<Self> {
+        Ok(Self::from_file(store.load().await?.values.backup.as_ref()))
     }
 }
 
@@ -236,23 +237,23 @@ impl Backups {
         *self.next_check.lock().unwrap()
     }
 
-    /// Builds the bundle for the database behind `pool` and the current
+    /// Builds the bundle for the database behind `store` and the current
     /// settings (without encrypting it).
-    pub async fn snapshot(&self, pool: &PgPool) -> Result<Bundle> {
-        let eff = settings::load(&self.data_dir)?;
-        snapshot(pool, &settings::to_toml(&eff.values)?).await
+    pub async fn snapshot(&self, store: &Store) -> Result<Bundle> {
+        let eff = store.load().await?;
+        snapshot(&store.pool, &settings::to_toml(&eff.values)?).await
     }
 
     /// One backup run. Errors are also recorded in the state file.
-    pub async fn run(&self, pool: &PgPool, trigger: Trigger) -> Result<Outcome> {
+    pub async fn run(&self, store: &Store, trigger: Trigger) -> Result<Outcome> {
         let Ok(_guard) = self.lock.try_lock() else {
             return Ok(Outcome::Busy);
         };
-        let cfg = BackupConfig::load(&self.data_dir)?;
+        let cfg = BackupConfig::load(store).await?;
         if trigger == Trigger::Scheduled && !cfg.enabled {
             return Ok(Outcome::Disabled);
         }
-        let result = self.run_locked(pool, &cfg, trigger).await;
+        let result = self.run_locked(store, &cfg, trigger).await;
         let mut st = self.state();
         let now = Utc::now();
         st.last_check_at = Some(now);
@@ -283,13 +284,13 @@ impl Backups {
 
     async fn run_locked(
         &self,
-        pool: &PgPool,
+        store: &Store,
         cfg: &BackupConfig,
         trigger: Trigger,
     ) -> Result<Outcome> {
         cfg.check()?;
         let client = cfg.client()?;
-        let bundle = self.snapshot(pool).await?;
+        let bundle = self.snapshot(store).await?;
         let hash = bundle.manifest.content_hash.clone();
         let prev = self.state();
         if trigger == Trigger::Scheduled && prev.last_hash.as_deref() == Some(hash.as_str()) {
@@ -347,7 +348,7 @@ impl Backups {
 
     /// Starts the schedule for one serve generation; dropping the returned
     /// handle stops it (on reload, like the TLS tasks).
-    pub fn start(self: &Arc<Self>, pool: PgPool) -> Schedule {
+    pub fn start(self: &Arc<Self>, store: Store) -> Schedule {
         let me = self.clone();
         let task = tokio::spawn(async move {
             let mut next = Utc::now() + FIRST_CHECK_DELAY;
@@ -355,14 +356,15 @@ impl Backups {
                 *me.next_check.lock().unwrap() = Some(next);
                 let wait = (next - Utc::now()).to_std().unwrap_or_default();
                 tokio::time::sleep(wait).await;
-                match me.run(&pool, Trigger::Scheduled).await {
+                match me.run(&store, Trigger::Scheduled).await {
                     Ok(Outcome::Unchanged { .. }) => {
                         tracing::info!("backup check: nothing changed, skipped")
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!(error = %format!("{e:#}"), "scheduled backup failed"),
                 }
-                let hours = BackupConfig::load(&me.data_dir)
+                let hours = BackupConfig::load(&store)
+                    .await
                     .map(|c| c.interval_hours)
                     .unwrap_or(DEFAULT_INTERVAL_HOURS);
                 next = Utc::now() + chrono::Duration::hours(i64::from(hours));

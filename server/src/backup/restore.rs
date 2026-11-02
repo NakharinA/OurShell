@@ -1,12 +1,10 @@
 //! `ourshell-server restore <file.osbk | s3:KEY | s3:latest> [--dry-run]`.
 
-use std::path::Path;
-
 use anyhow::{anyhow, bail, ensure, Context, Result};
 
 use super::format::{self, Bundle};
 use super::{dump, BackupConfig};
-use crate::settings::{self, FileConfig};
+use crate::settings::{self, Effective, FileConfig};
 use crate::sqlx::migrate::Migrator;
 use crate::sqlx::{PgPool, PgPoolOptions};
 
@@ -62,18 +60,22 @@ pub async fn restore_database(
     Ok(loaded)
 }
 
-/// The backup's `config.toml` minus every key the environment `env`
-/// overrides (those keep coming from the environment).
+/// The backup's configuration, split into the bootstrap keys for
+/// `config.toml` (minus those the environment `env` sets, which keep coming
+/// from there) and every other setting, for the database (all of them: the
+/// environment overrides them at runtime anyway, and the restored server
+/// keeps working if it's later started without those variables).
 pub fn restored_config(
     bundle: &Bundle,
     env: &dyn Fn(&str) -> Option<String>,
-) -> Result<FileConfig> {
-    let mut file: FileConfig =
+) -> Result<(FileConfig, FileConfig)> {
+    let file: FileConfig =
         toml::from_str(&bundle.config_toml).context("the backup's config.toml is invalid")?;
+    let mut boot = file.bootstrap();
     for key in settings::apply_env(&FileConfig::default(), env)?.env_locked {
-        settings::clear_key(&mut file, key);
+        settings::clear_key(&mut boot, key);
     }
-    Ok(file)
+    Ok((boot, file.without_bootstrap()))
 }
 
 fn print_manifest(source: &str, bundle: &Bundle) {
@@ -88,15 +90,16 @@ fn print_manifest(source: &str, bundle: &Bundle) {
     }
 }
 
-async fn fetch(source: &str, data_dir: &Path) -> Result<(String, Vec<u8>)> {
+async fn fetch(source: &str, current: &Effective) -> Result<(String, Vec<u8>)> {
     let Some(key) = source.strip_prefix("s3:") else {
         let bytes =
             std::fs::read(source).with_context(|| format!("can't read backup file {source}"))?;
         return Ok((source.to_string(), bytes));
     };
-    let cfg = BackupConfig::load(data_dir)?;
+    let cfg = BackupConfig::from_file(current.values.backup.as_ref());
     let client = cfg.client().context(
-        "s3: needs the backup storage settings (config.toml [backup] or OURSHELL_BACKUP_S3_* variables)",
+        "s3: needs the backup storage settings (OURSHELL_BACKUP_S3_* variables, or this server's \
+         settings from /admin -> Backups when its database is reachable)",
     )?;
     let key = if key == "latest" {
         let objects = client.list(&cfg.prefix).await?;
@@ -121,11 +124,12 @@ async fn fetch(source: &str, data_dir: &Path) -> Result<(String, Vec<u8>)> {
     Ok((format!("s3://{}/{key}", client.bucket()), bytes))
 }
 
-fn passphrase(data_dir: &Path) -> Result<String> {
-    if let Some(p) = settings::load(data_dir)
-        .ok()
-        .and_then(|e| e.values.backup)
-        .and_then(|b| b.passphrase)
+fn passphrase(current: &Effective) -> Result<String> {
+    if let Some(p) = current
+        .values
+        .backup
+        .as_ref()
+        .and_then(|b| b.passphrase.clone())
         .filter(|p| !p.is_empty())
     {
         return Ok(p);
@@ -152,8 +156,14 @@ pub async fn run_cli(args: &[String]) -> Result<()> {
         bail!("{USAGE}");
     };
     let data_dir = settings::data_dir();
-    let (label, bytes) = fetch(source, &data_dir).await?;
-    let pass = passphrase(&data_dir)?;
+    // This server's current settings (environment, config.toml and, when
+    // reachable, its database) for the S3 storage and the passphrase.
+    let (current, store) = crate::startup::cli_settings(&data_dir).await?;
+    if let Some(s) = store {
+        s.pool.close().await;
+    }
+    let (label, bytes) = fetch(source, &current).await?;
+    let pass = passphrase(&current)?;
     let bundle = tokio::task::spawn_blocking(move || format::open(&bytes, &pass))
         .await
         .map_err(|e| anyhow!("decryption task failed: {e}"))??;
@@ -199,22 +209,45 @@ pub async fn run_cli(args: &[String]) -> Result<()> {
     let rows: u64 = loaded.iter().map(|(_, r)| r).sum();
     eprintln!("Restored {} tables, {rows} rows.", loaded.len());
 
-    let restored = restored_config(&bundle, &env)?;
+    // The backup's settings go into the restored database, encrypted with
+    // the master key it was made with (the environment's, which must match).
+    let (boot, restored_settings) = restored_config(&bundle, &env)?;
+    let key_b64 = backup_file
+        .server_master_key
+        .clone()
+        .or_else(|| env("SERVER_MASTER_KEY"))
+        .filter(|k| !k.trim().is_empty())
+        .ok_or_else(|| anyhow!("the backup has no master key; set SERVER_MASTER_KEY"))?;
+    let key = crate::config::decode_master_key(&key_b64)?;
+    settings::db::write(&pool, &key, &restored_settings).await?;
+    eprintln!("Restored the server settings into the database.");
+
     let path = data_dir.join(settings::CONFIG_FILE);
     if path.exists() {
-        let saved = data_dir.join(format!(
-            "{}.before-restore-{}",
-            settings::CONFIG_FILE,
-            chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
-        ));
-        std::fs::copy(&path, &saved)
+        let saved = settings::save_copy(&data_dir, "before-restore")
             .with_context(|| format!("failed to save {}", path.display()))?;
         eprintln!("Saved the previous config as {}", saved.display());
     }
-    settings::write(&data_dir, &restored)?;
+    // config.toml keeps only the bootstrap keys; its old settings would
+    // override the restored ones.
+    let previous = settings::read(&data_dir).unwrap_or_default();
+    let new_file = settings::merge(&previous.bootstrap(), &boot);
+    match settings::write(&data_dir, &new_file) {
+        Ok(()) => eprintln!("Wrote {}", path.display()),
+        Err(e) => eprintln!("Couldn't write {}: {e:#}", path.display()),
+    }
     // The old backup state describes the old database.
     let _ = std::fs::remove_file(data_dir.join(super::STATE_FILE));
-    eprintln!("Wrote {}", path.display());
+    let persistence = crate::startup::data_dir_persistence(&data_dir);
+    if !persistence.persistent && env("SERVER_MASTER_KEY").is_none() {
+        eprintln!();
+        eprintln!(
+            "WARNING: {}. Add this to the server's environment, or the next redeploy",
+            persistence.detail
+        );
+        eprintln!("loses the master key and the restored data can't be read:");
+        eprintln!("  SERVER_MASTER_KEY={}", key_b64.trim());
+    }
     eprintln!();
     eprintln!("Next: restart the server so it picks up the restored data and configuration,");
     eprintln!("e.g. `docker restart ourshell-server`. Accounts, devices and sign-ins are as they");
@@ -245,11 +278,16 @@ mod tests {
             "OURSHELL_BACKUP_S3_BUCKET" => Some("env-bucket".to_string()),
             _ => None,
         };
-        let f = restored_config(&b, &env).unwrap();
-        assert_eq!(f.database_url, None);
-        assert_eq!(f.server_master_key.as_deref(), Some("k"));
+        let (boot, f) = restored_config(&b, &env).unwrap();
+        assert_eq!(boot.database_url, None);
+        assert_eq!(boot.server_master_key.as_deref(), Some("k"));
+        assert_eq!(boot.public_url, None, "settings go to the database");
+        assert_eq!(
+            f.server_master_key, None,
+            "the key never goes to the database"
+        );
         assert_eq!(f.public_url.as_deref(), Some("https://old"));
         let bk = f.backup.unwrap();
-        assert_eq!((bk.bucket, bk.keep), (None, Some(3)));
+        assert_eq!((bk.bucket.as_deref(), bk.keep), (Some("b"), Some(3)));
     }
 }
