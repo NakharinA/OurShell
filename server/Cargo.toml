@@ -103,7 +103,7 @@ ipnet = "2"
 # hmac + sha2 0.10 instead of pulling in the AWS SDK. flate2's default
 # backend is the pure-Rust miniz_oxide.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-hmac = "0.12"
+hmac = "0.13"
 flate2 = "1"
 
 [dev-dependencies]

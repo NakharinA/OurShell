@@ -2837,7 +2837,7 @@ dependencies = [
  "chrono",
  "flate2",
  "futures",
- "hmac 0.12.1",
+ "hmac 0.13.0",
  "http-body-util",
  "ipnet",
  "openidconnect",
